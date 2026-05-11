@@ -15,8 +15,12 @@ pip install -e .
 
 ## Run one rollout
 
+On Hopper (H100/GH200) with vLLM 0.20.x, set `VLLM_USE_DEEP_GEMM=0` — the
+warmup probes the optional `deep_gemm` FP8 kernels even for bf16 models and
+will error out if the lib isn't installed.
+
 ```
-python scripts/run_one.py \
+VLLM_USE_DEEP_GEMM=0 python scripts/run_one.py \
     --hf-model Qwen/Qwen2.5-7B-Instruct \
     --sim-model Qwen2.5-7B \
     --hardware H100_SXM \
@@ -40,10 +44,30 @@ For each rollout:
 
 The transcript is printed and (with `--out`) dumped as JSON for later inspection.
 
+## Building the dataset
+
+The original `PROBLEMS` list in `tasks.py` has 4 hardcoded Countdown puzzles — fine for base-model exploration, useless for training. Build a stratified dataset from Jiayi-Pan/Countdown-Tasks-3to4:
+
+```
+python scripts/build_dataset.py --out-dir data --train-size 10000 --eval-size 500
+```
+
+This downloads the parquet (~3 MB, cached at `~/.cache/interoception/`), filters to 4-number problems, runs our Countdown solver on each, drops unsolvable + trivial (>50 solutions), buckets by `solution_count` (rare / med / common), and samples uniformly across buckets. Writes `train.jsonl` + `eval.jsonl`. Takes ~4 min for the default 60K-solve cap.
+
+Load in code via `interoception.tasks.load_problems("data/train.jsonl")`.
+
+## Prompt styles
+
+The system prompt has three variants (set via `--prompt-style`). See the docstring on `build_system_prompt` in `src/interoception/rollout.py` for the exact text.
+
+- **default** — naive baseline. Mentions the budget and the `[Xs elapsed]` tag, says "pace yourself," no specific rules.
+- **medium** — same setup as default but adds "take these signals seriously and adjust your strategy accordingly." Tests whether emphasizing the signal as important is enough, without specifying a policy.
+- **strong** — full prescriptive policy: state remaining budget every turn, switch strategies if repeating, commit at 70%, commit immediately if correct. Tests the ceiling of prompt-only elicitation.
+
 ## Sweep over budgets and problems
 
 ```
-python scripts/run_sweep.py \
+VLLM_USE_DEEP_GEMM=0 python scripts/run_sweep.py \
     --hf-model Qwen/Qwen2.5-7B-Instruct \
     --sim-model Qwen2.5-7B \
     --hardware H100_SXM \

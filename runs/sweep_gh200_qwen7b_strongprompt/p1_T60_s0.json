@@ -1,0 +1,65 @@
+{
+  "args": {
+    "hf_model": "Qwen/Qwen2.5-7B-Instruct",
+    "sim_model": "Qwen2.5-7B",
+    "hardware": "GH200",
+    "target_s": [
+      15.0,
+      30.0,
+      60.0,
+      120.0
+    ],
+    "problems": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "seeds": [
+      0
+    ],
+    "chunk_tokens": 256,
+    "max_turns": 32,
+    "temperature": 0.7,
+    "prompt_style": "strong",
+    "out_dir": "runs/sweep_gh200_qwen7b_strongprompt"
+  },
+  "problem_idx": 1,
+  "problem": {
+    "numbers": [
+      1,
+      5,
+      6,
+      7
+    ],
+    "target": 21
+  },
+  "target_s": 60.0,
+  "seed": 0,
+  "answer": "7 * (6 - 5 + 1) = 21",
+  "answer_emitted": true,
+  "timed_out": false,
+  "elapsed_s": 1.2373025215972182,
+  "total_output_tokens": 59,
+  "correct": null,
+  "turns": [
+    {
+      "role": "system",
+      "content": "You are solving a problem under a strict wallclock time budget of 60 seconds.\n\nThe user will inject \"[X seconds elapsed]\" messages between your turns telling you how much wallclock time has passed. You MUST use these signals to pace yourself:\n\n1. After each elapsed message, briefly state how much of the 60s budget is left and whether your current approach is making progress.\n2. If your reasoning is repeating itself \u2014 trying combinations you've already tried, or getting the same wrong answer \u2014 STOP that line and switch strategies.\n3. If more than 70% of your budget is gone and you do not have a confident answer, commit to your best current guess rather than continuing to search. A wrong answer is better than no answer (a timeout scores zero).\n4. If you find a correct answer, commit immediately \u2014 do not keep exploring.\n\nOutput your final answer inside <answer>...</answer> tags. Anything after </answer> is ignored.",
+      "output_tokens": 0,
+      "elapsed_s_at_end": 0.0
+    },
+    {
+      "role": "user",
+      "content": "Using the numbers [1, 5, 6, 7] and the operators +, -, *, / (each number used exactly once), find an expression that equals 21. Show your reasoning, then put the final expression inside <answer>...</answer>.",
+      "output_tokens": 0,
+      "elapsed_s_at_end": 0.0
+    },
+    {
+      "role": "assistant",
+      "content": "I will start by trying to form the target number 21 using the given numbers and operators. I have 60 seconds to find a solution, so I need to work efficiently.\n\n<answer>7 * (6 - 5 + 1) = 21</answer>",
+      "output_tokens": 59,
+      "elapsed_s_at_end": 1.2373025215972182
+    }
+  ]
+}

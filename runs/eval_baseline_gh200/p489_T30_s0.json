@@ -1,0 +1,73 @@
+{
+  "args": {
+    "hf_model": "Qwen/Qwen2.5-7B-Instruct",
+    "sim_model": "Qwen2.5-7B",
+    "hardware": "GH200",
+    "target_s": [
+      30.0,
+      60.0
+    ],
+    "problems_file": "data/eval.jsonl",
+    "num_problems": 50,
+    "sample_seed": 0,
+    "problems": null,
+    "seeds": [
+      0
+    ],
+    "chunk_tokens": 256,
+    "max_turns": 32,
+    "temperature": 0.7,
+    "prompt_style": "default",
+    "out_dir": "runs/eval_baseline_gh200"
+  },
+  "problem_idx": 489,
+  "problem": {
+    "numbers": [
+      10,
+      90,
+      75,
+      20
+    ],
+    "target": 70
+  },
+  "target_s": 30.0,
+  "seed": 0,
+  "answer": "90 - 20 + 10",
+  "answer_emitted": true,
+  "timed_out": false,
+  "elapsed_s": 6.7658305571915545,
+  "total_output_tokens": 272,
+  "correct": false,
+  "turns": [
+    {
+      "role": "system",
+      "content": "You are solving a problem under a wallclock time budget.\nYour budget is 30 seconds.\nBetween your turns the user will inject messages of the form \"[X seconds elapsed]\" telling you how much wallclock time has passed.\nYou should pace yourself: think when there is time, commit to an answer when time runs short. When you are ready, output your final answer inside <answer>...</answer> tags. Anything after </answer> is ignored.",
+      "output_tokens": 0,
+      "elapsed_s_at_end": 0.0
+    },
+    {
+      "role": "user",
+      "content": "Using the numbers [10, 90, 75, 20] and the operators +, -, *, / (each number used exactly once), find an expression that equals 70. Show your reasoning, then put the final expression inside <answer>...</answer>.",
+      "output_tokens": 0,
+      "elapsed_s_at_end": 0.0
+    },
+    {
+      "role": "assistant",
+      "content": "Let's work through this step-by-step:\n\n1. We have the numbers: 10, 90, 75, 20.\n2. We need to use each number exactly once and achieve the result 70 using +, -, *, /.\n\nFirst, let's try some combinations:\n\n- 90 - 20 = 70, but we still have 10 and 75 left.\n- 75 - 10 = 65, which is close but not 70.\n- 10 * 7 = 70, but we don't have a 7.\n\nNow, combining these:\n\n- (90 - 20) + 10 = 80, which is too high.\n- (90 - 20) - 10 = 60, which is too low.\n\nLet's try division:\n\n- 90 / 10 = 9, then 9 * 7 = 63, but we don't have a 7.\n\nFinally, let's try a combination that uses multiplication and subtraction:\n\n- 90 - 20 = 70, but we still have 10 and ",
+      "output_tokens": 256,
+      "elapsed_s_at_end": 6.419537751157615
+    },
+    {
+      "role": "user",
+      "content": "[6.4s elapsed]",
+      "output_tokens": 0,
+      "elapsed_s_at_end": 6.419537751157615
+    },
+    {
+      "role": "assistant",
+      "content": "<answer>90 - 20 + 10</answer>",
+      "output_tokens": 16,
+      "elapsed_s_at_end": 6.7658305571915545
+    }
+  ]
+}

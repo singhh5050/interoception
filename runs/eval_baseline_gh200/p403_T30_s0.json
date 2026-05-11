@@ -1,0 +1,73 @@
+{
+  "args": {
+    "hf_model": "Qwen/Qwen2.5-7B-Instruct",
+    "sim_model": "Qwen2.5-7B",
+    "hardware": "GH200",
+    "target_s": [
+      30.0,
+      60.0
+    ],
+    "problems_file": "data/eval.jsonl",
+    "num_problems": 50,
+    "sample_seed": 0,
+    "problems": null,
+    "seeds": [
+      0
+    ],
+    "chunk_tokens": 256,
+    "max_turns": 32,
+    "temperature": 0.7,
+    "prompt_style": "default",
+    "out_dir": "runs/eval_baseline_gh200"
+  },
+  "problem_idx": 403,
+  "problem": {
+    "numbers": [
+      3,
+      56,
+      9,
+      93
+    ],
+    "target": 96
+  },
+  "target_s": 30.0,
+  "seed": 0,
+  "answer": "93 + (56 / 9 - 3) = 96",
+  "answer_emitted": true,
+  "timed_out": false,
+  "elapsed_s": 6.915765326257463,
+  "total_output_tokens": 279,
+  "correct": null,
+  "turns": [
+    {
+      "role": "system",
+      "content": "You are solving a problem under a wallclock time budget.\nYour budget is 30 seconds.\nBetween your turns the user will inject messages of the form \"[X seconds elapsed]\" telling you how much wallclock time has passed.\nYou should pace yourself: think when there is time, commit to an answer when time runs short. When you are ready, output your final answer inside <answer>...</answer> tags. Anything after </answer> is ignored.",
+      "output_tokens": 0,
+      "elapsed_s_at_end": 0.0
+    },
+    {
+      "role": "user",
+      "content": "Using the numbers [3, 56, 9, 93] and the operators +, -, *, / (each number used exactly once), find an expression that equals 96. Show your reasoning, then put the final expression inside <answer>...</answer>.",
+      "output_tokens": 0,
+      "elapsed_s_at_end": 0.0
+    },
+    {
+      "role": "assistant",
+      "content": "Let's work through this step-by-step:\n\n1. We need to use each number exactly once and the operators +, -, *, /.\n2. The target is 96.\n\nLet's try some combinations:\n\n- 93 + 56 - 9 - 3 = 137 (too high)\n- 93 + 56 - 9 / 3 = 148 (too high)\n- 93 + 56 / 9 - 3 = 101 (too high)\n- 93 + 56 / (9 * 3) = 95.88 (close but not exact)\n- 93 - 56 + 9 * 3 = 90 (too low)\n- 93 - 56 * 9 / 3 = 37 (too low)\n\nLet's focus on getting close to 96:\n\n- 93 + (56 / 9 - 3) = 96\n\nThis works because:\n93 + (56 / 9 - 3) = 93 + (6.222 - 3) = 93 + 3.2",
+      "output_tokens": 256,
+      "elapsed_s_at_end": 6.4177839783603465
+    },
+    {
+      "role": "user",
+      "content": "[6.4s elapsed]",
+      "output_tokens": 0,
+      "elapsed_s_at_end": 6.4177839783603465
+    },
+    {
+      "role": "assistant",
+      "content": "<answer>93 + (56 / 9 - 3) = 96</answer>",
+      "output_tokens": 23,
+      "elapsed_s_at_end": 6.915765326257463
+    }
+  ]
+}

@@ -49,16 +49,61 @@ class RolloutResult:
         return sum(t.output_tokens for t in self.turns if t.role == "assistant")
 
 
-def build_system_prompt(target_s: float) -> str:
-    return (
-        "You are solving a problem under a wallclock time budget.\n"
-        f"Your budget is {target_s:.0f} seconds.\n"
-        "Between your turns the user will inject messages of the form "
-        '"[X seconds elapsed]" telling you how much wallclock time has passed.\n'
-        "You should pace yourself: think when there is time, commit to an answer "
-        "when time runs short. When you are ready, output your final answer "
-        "inside <answer>...</answer> tags. Anything after </answer> is ignored."
-    )
+def build_system_prompt(target_s: float, style: str = "default") -> str:
+    """Build the system prompt for a rollout.
+
+    Three styles, varying in how much guidance the model gets about the
+    elapsed-time signal:
+
+    - "default": Mentions the budget and the [Xs elapsed] tag and says
+      "pace yourself," but gives no specific decision rules. Closest to a
+      naive "we told the model what's happening" baseline.
+
+    - "medium":  Same setup as default, but explicitly frames the elapsed
+      messages as a signal to "take seriously and adjust strategy
+      accordingly." Tests whether *emphasizing* the signal as important
+      is enough to elicit time-aware behavior, without specifying any
+      policy.
+
+    - "strong":  Full prescriptive policy — state remaining budget after
+      each elapsed message, switch strategies if repeating, commit at 70%,
+      commit immediately if correct. Tests the ceiling of what prompting
+      alone can install.
+    """
+    if style == "default":
+        return (
+            "You are solving a problem under a wallclock time budget.\n"
+            f"Your budget is {target_s:.0f} seconds.\n"
+            "Between your turns the user will inject messages of the form "
+            '"[X seconds elapsed]" telling you how much wallclock time has passed.\n'
+            "You should pace yourself: think when there is time, commit to an answer "
+            "when time runs short. When you are ready, output your final answer "
+            "inside <answer>...</answer> tags. Anything after </answer> is ignored."
+        )
+    if style == "medium":
+        return (
+            f"You are solving a problem under a strict wallclock time budget of {target_s:.0f} seconds.\n\n"
+            'The user will inject "[X seconds elapsed]" messages between your turns telling you '
+            "how much wallclock time has passed. Take these signals seriously and adjust your "
+            "strategy accordingly.\n\n"
+            "Output your final answer inside <answer>...</answer> tags. Anything after </answer> is ignored."
+        )
+    if style == "strong":
+        return (
+            f"You are solving a problem under a strict wallclock time budget of {target_s:.0f} seconds.\n\n"
+            'The user will inject "[X seconds elapsed]" messages between your turns telling you '
+            "how much wallclock time has passed. You MUST use these signals to pace yourself:\n\n"
+            f"1. After each elapsed message, briefly state how much of the {target_s:.0f}s budget is "
+            "left and whether your current approach is making progress.\n"
+            "2. If your reasoning is repeating itself — trying combinations you've already tried, "
+            "or getting the same wrong answer — STOP that line and switch strategies.\n"
+            "3. If more than 70% of your budget is gone and you do not have a confident answer, "
+            "commit to your best current guess rather than continuing to search. A wrong answer "
+            "is better than no answer (a timeout scores zero).\n"
+            "4. If you find a correct answer, commit immediately — do not keep exploring.\n\n"
+            "Output your final answer inside <answer>...</answer> tags. Anything after </answer> is ignored."
+        )
+    raise ValueError(f"unknown prompt style: {style!r}")
 
 
 def run_rollout(
@@ -71,10 +116,11 @@ def run_rollout(
     max_turns: int = 32,
     temperature: float = 0.7,
     seed: int | None = None,
+    prompt_style: str = "default",
 ) -> RolloutResult:
     tokenizer = llm.get_tokenizer()
 
-    system_prompt = build_system_prompt(target_s)
+    system_prompt = build_system_prompt(target_s, style=prompt_style)
     messages: list[dict] = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": question},
@@ -86,10 +132,10 @@ def run_rollout(
     elapsed_s = 0.0
 
     for turn_idx in range(max_turns):
-        prompt_token_ids = tokenizer.apply_chat_template(
-            messages, add_generation_prompt=True, tokenize=True
+        prompt_text = tokenizer.apply_chat_template(
+            messages, add_generation_prompt=True, tokenize=False
         )
-        prev_ctx_tokens = len(prompt_token_ids)
+        prev_ctx_tokens = len(tokenizer.encode(prompt_text, add_special_tokens=False))
 
         sp = SamplingParams(
             max_tokens=chunk_tokens,
@@ -99,7 +145,7 @@ def run_rollout(
             seed=seed,
         )
         outs = llm.generate(
-            prompt_token_ids=[prompt_token_ids],
+            prompts=[prompt_text],
             sampling_params=sp,
             use_tqdm=False,
         )

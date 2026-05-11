@@ -1,0 +1,17 @@
+problem_idx,numbers,target,target_s,seed,answer,answer_emitted,timed_out,elapsed_s,total_output_tokens,n_assistant_turns,correct,run_file
+0,2-3-4-5,24,15.0,0,(4+5)*(3,True,False,6.493,256,1,,p0_T15_s0.json
+0,2-3-4-5,24,30.0,0,(5 + 3) * (4 - 2)</,True,False,13.09,512,2,,p0_T30_s0.json
+0,2-3-4-5,24,60.0,0,(5 * 4) + (3 / 2) = 24,True,False,11.613,455,2,,p0_T60_s0.json
+0,2-3-4-5,24,120.0,0,(5 + 3) * (4 / 2),True,False,23.056,893,4,False,p0_T120_s0.json
+1,1-5-6-7,21,15.0,0,1 + 6 * 5 - 7,True,False,15.222,594,3,False,p1_T15_s0.json
+1,1-5-6-7,21,30.0,0,7 * (5 - 1) + 6,True,False,30.216,1164,5,False,p1_T30_s0.json
+1,1-5-6-7,21,60.0,0,7 * (6 - 5 + 1) = 21,True,False,1.237,59,1,,p1_T60_s0.json
+1,1-5-6-7,21,120.0,0,(7 + 5) * (6 / 1) - 1,True,False,118.969,4426,18,False,p1_T120_s0.json
+2,3-5-7-8,24,15.0,0,(8 * (7 - 5)) + 3,True,False,16.056,626,3,False,p2_T15_s0.json
+2,3-5-7-8,24,30.0,0,(8 * (7 - 5)) + 3,True,False,29.208,1126,5,False,p2_T30_s0.json
+2,3-5-7-8,24,60.0,0,(8 * (7 - 5)) + 3,True,False,51.43,1957,8,False,p2_T60_s0.json
+2,3-5-7-8,24,120.0,0,(8 * 3) + (7 - 5) = 24,True,False,25.693,993,4,,p2_T120_s0.json
+3,2-4-6-9,24,15.0,0,6 * (9 - 4) + 2 = 24,True,False,1.237,59,1,,p3_T15_s0.json
+3,2-4-6-9,24,30.0,0,(9 + 4 + 6) * 2 = 24,True,False,26.059,1007,4,,p3_T30_s0.json
+3,2-4-6-9,24,60.0,0,6 * (4 + 2) - 9,True,False,9.007,354,2,False,p3_T60_s0.json
+3,2-4-6-9,24,120.0,0,(9 * (6 - 4)) + 2 = 24,True,False,1.652,65,1,,p3_T120_s0.json

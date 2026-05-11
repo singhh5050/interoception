@@ -24,7 +24,7 @@ from interoception.tasks import PROBLEMS
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser()
-    p.add_argument("--hf-model", default="Qwen/Qwen2.5-7B-Instruct",
+    p.add_argument("--hf-model", default="Qwen/Qwen2.5-Math-7B-Instruct",
                    help="HuggingFace checkpoint loaded by vLLM")
     p.add_argument("--sim-model", default="Qwen2.5-7B",
                    help="Model name in the hwprop catalog (must be calibrated)")
@@ -56,7 +56,6 @@ def main() -> None:
         model=args.hf_model,
         dtype="bfloat16",
         enable_prefix_caching=True,
-        max_model_len=8192,
     )
     estimator = WallclockEstimator(hardware=args.hardware, sim_model=args.sim_model)
 
