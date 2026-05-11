@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "interoception"
+version = "0.1.0"
+description = "Exploratory experiment: inject wallclock time into LLM context and observe behavior"
+requires-python = ">=3.10"
+dependencies = [
+    "vllm>=0.6.0",
+    "transformers>=4.45.0",
+    "hwprop @ file:///Users/nicolema/hardware-proprioception",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
