@@ -1,0 +1,105 @@
+problem_idx,numbers,target,solution_count,difficulty_band,target_s,seed,answer,answer_emitted,timed_out,elapsed_s,total_output_tokens,n_assistant_turns,correct,run_file
+315,86-1-93-6,42,39,common,30.0,0,None of the above combinations give the result 42.,True,False,15.094,596,3,,p315_T30_s0.json
+315,86-1-93-6,42,39,common,60.0,0,\( 93 - 86 + 6 + 1 = 28 + 1 = 29,True,False,26.251,1024,4,,p315_T60_s0.json
+256,81-80-6-79,83,3,rare,30.0,0,Not possible,True,False,11.696,464,2,,p256_T30_s0.json
+256,81-80-6-79,83,3,rare,60.0,0,Not possible,True,False,21.617,847,4,,p256_T60_s0.json
+131,10-7-78-4,37,4,med,30.0,0,78 - 10 / 7 - 4,True,False,18.827,740,3,False,p131_T30_s0.json
+131,10-7-78-4,37,4,med,60.0,0,"It is not possible to form an expression using the numbers 10, 7, 78, and 4 and the operators +, -, *, / that equals 37.",True,False,22.426,878,4,,p131_T60_s0.json
+58,43-84-38-47,67,2,rare,30.0,0,(84 - 47) +,True,False,12.93,512,2,,p58_T30_s0.json
+58,43-84-38-47,67,2,rare,60.0,0,47 + 43 - 84 / 4,True,False,6.021,244,2,False,p58_T60_s0.json
+247,9-39-10-56,59,3,rare,30.0,0,None,True,False,31.706,1231,5,,p247_T30_s0.json
+247,9-39-10-56,59,3,rare,60.0,0,Not possible with the given numbers and operators,True,False,18.985,746,3,,p247_T60_s0.json
+304,75-9-81-39,77,3,rare,30.0,0,9*8-6,True,False,18.231,717,3,False,p304_T30_s0.json
+304,75-9-81-39,77,3,rare,60.0,0,75 - 81 + 9 + 39,True,False,14.159,566,3,False,p304_T60_s0.json
+64,41-96-93-22,21,4,med,30.0,0,,False,True,33.003,1280,5,,p64_T30_s0.json
+64,41-96-93-22,21,4,med,60.0,0,96 + 22 - 93,True,False,11.338,450,2,False,p64_T60_s0.json
+262,30-8-58-10,63,14,common,30.0,0,(58,True,False,12.929,512,2,,p262_T30_s0.json
+262,30-8-58-10,63,14,common,60.0,0,,True,False,6.395,256,1,,p262_T60_s0.json
+69,59-14-60-77,14,12,med,30.0,0,Not possible to form an expression that equals 14 with the given numbers and operations.,True,False,12.056,478,2,,p69_T30_s0.json
+69,59-14-60-77,14,12,med,60.0,0,None,True,False,21.436,840,4,,p69_T60_s0.json
+382,48-22-78-40,98,2,rare,30.0,0,(78/40) * 70,True,False,6.043,242,1,False,p382_T30_s0.json
+382,48-22-78-40,98,2,rare,60.0,0,78 - 40 + 60,True,False,17.557,691,3,False,p382_T60_s0.json
+142,2-70-63-31,12,8,med,30.0,0,None,True,False,28.515,1110,5,,p142_T30_s0.json
+142,2-70-63-31,12,8,med,60.0,0,None,True,False,11.978,475,2,,p142_T60_s0.json
+44,22-19-8-81,83,3,rare,30.0,0,81 + 22 - 19 + 2,True,False,25.046,978,4,False,p44_T30_s0.json
+44,22-19-8-81,83,3,rare,60.0,0,(81 - 22) + (19 * 8),True,False,4.433,178,1,False,p44_T60_s0.json
+367,9-24-39-85,78,2,rare,30.0,0,39 * (24 - 9),True,False,8.985,358,2,False,p367_T30_s0.json
+367,9-24-39-85,78,2,rare,60.0,0,None found within time constraints,True,False,16.441,648,3,,p367_T60_s0.json
+134,70-87-26-21,85,8,med,30.0,0,It is not possible to form an expression that equals 85 with the given numbers and operations.,True,False,16.209,639,3,,p134_T30_s0.json
+134,70-87-26-21,85,8,med,60.0,0,,False,True,60.37,2304,9,,p134_T60_s0.json
+129,52-14-58-88,11,8,med,30.0,0,,False,True,33.003,1280,5,,p129_T30_s0.json
+129,52-14-58-88,11,8,med,60.0,0,,False,True,60.37,2304,9,,p129_T60_s0.json
+275,4-2-96-39,52,2,rare,30.0,0,,False,True,32.999,1280,5,,p275_T30_s0.json
+275,4-2-96-39,52,2,rare,60.0,0,48 - 4 + 2 \times 4,True,False,6.782,274,2,,p275_T60_s0.json
+331,1-9-52-7,10,12,med,30.0,0,9 - 7 + 52 / 1,True,False,18.722,736,3,False,p331_T30_s0.json
+331,1-9-52-7,10,12,med,60.0,0,None,True,False,14.339,574,3,,p331_T60_s0.json
+24,28-69-13-54,27,10,med,30.0,0,69 - 13 - 28,True,False,4.81,193,1,False,p24_T30_s0.json
+24,28-69-13-54,27,10,med,60.0,0,28 + 13 - 15 + 54 / 2,True,False,8.502,339,2,False,p24_T60_s0.json
+17,40-11-3-12,14,36,common,30.0,0,None,True,False,22.663,887,4,,p17_T30_s0.json
+17,40-11-3-12,14,36,common,60.0,0,not possible,True,False,23.736,928,4,,p17_T60_s0.json
+442,61-82-5-64,97,6,med,30.0,0,,False,True,33.001,1280,5,,p442_T30_s0.json
+442,61-82-5-64,97,6,med,60.0,0,,False,True,60.367,2304,9,,p442_T60_s0.json
+224,8-8-87-65,65,18,common,30.0,0,Not possible,True,False,28.329,1103,5,,p224_T30_s0.json
+224,8-8-87-65,65,18,common,60.0,0,87 - 8 + 65,True,False,16.906,666,3,False,p224_T60_s0.json
+468,95-19-18-76,27,26,common,30.0,0,95 - 18 - 1 + 19,True,False,17.532,690,3,False,p468_T30_s0.json
+468,95-19-18-76,27,26,common,60.0,0,,False,True,60.37,2304,9,,p468_T60_s0.json
+26,88-83-15-95,34,3,rare,30.0,0,None,True,False,15.951,629,3,,p26_T30_s0.json
+26,88-83-15-95,34,3,rare,60.0,0,None,True,False,11.312,449,2,,p26_T60_s0.json
+216,87-13-72-58,95,10,med,30.0,0,(87 - 72) * 6 + 5,True,False,10.851,431,2,False,p216_T30_s0.json
+216,87-13-72-58,95,10,med,60.0,0,,False,True,60.37,2304,9,,p216_T60_s0.json
+118,82-11-56-69,22,22,common,30.0,0,82 - 69 + 11 - 11,True,False,18.7,735,3,False,p118_T30_s0.json
+118,82-11-56-69,22,22,common,60.0,0,"tag will not hold a non-exact solution.
+
+<answer>Not possible with given numbers and operations",True,False,17.142,675,3,,p118_T60_s0.json
+330,88-28-49-52,80,22,common,30.0,0,Not possible with given numbers and operators,True,False,18.414,724,3,,p330_T30_s0.json
+330,88-28-49-52,80,22,common,60.0,0,88 - (52 - 49) - 5,True,False,15.123,597,3,False,p330_T60_s0.json
+489,10-90-75-20,70,2,rare,30.0,0,(90 - 20) * 10 / 75,True,False,13.407,533,3,False,p489_T30_s0.json
+489,10-90-75-20,70,2,rare,60.0,0,None,True,False,16.831,663,3,,p489_T60_s0.json
+418,24-61-14-96,60,11,med,30.0,0,,False,True,33.003,1280,5,,p418_T30_s0.json
+418,24-61-14-96,60,11,med,60.0,0,96 / 4 + 24 - 14,True,False,14.813,585,3,False,p418_T60_s0.json
+369,27-69-65-87,30,4,med,30.0,0,not possible,True,False,17.557,691,3,,p369_T30_s0.json
+369,27-69-65-87,30,4,med,60.0,0,,False,True,60.37,2304,9,,p369_T60_s0.json
+295,34-31-11-82,49,6,med,30.0,0,Not possible,True,False,15.821,624,3,,p295_T30_s0.json
+295,34-31-11-82,49,6,med,60.0,0,(82 - 34) - (31 - 11),True,False,6.119,245,1,False,p295_T60_s0.json
+62,48-42-11-7,19,16,common,30.0,0,48 / 42 + 11 + 7,True,False,11.542,458,2,False,p62_T30_s0.json
+62,48-42-11-7,19,16,common,60.0,0,,False,True,60.367,2304,9,,p62_T60_s0.json
+109,8-12-13-41,51,12,med,30.0,0,(41 + 13 + 8) - 12,True,False,18.491,727,3,False,p109_T30_s0.json
+109,8-12-13-41,51,12,med,60.0,0,,False,True,60.367,2304,9,,p109_T60_s0.json
+365,28-2-42-18,65,4,med,30.0,0,(28 - 18) * 42 + 2,True,False,15.044,594,3,False,p365_T30_s0.json
+365,28-2-42-18,65,4,med,60.0,0,(42 - 18 - 2) + 2,True,False,9.853,392,2,False,p365_T60_s0.json
+56,21-18-69-81,63,4,med,30.0,0,81 - 18,True,False,3.208,129,1,False,p56_T30_s0.json
+56,21-18-69-81,63,4,med,60.0,0,...,True,False,22.325,874,4,,p56_T60_s0.json
+199,76-43-76-50,92,20,common,30.0,0,None,True,False,14.709,581,3,,p199_T30_s0.json
+199,76-43-76-50,92,20,common,60.0,0,(76 * 43 - 76 + 50),True,False,19.507,766,3,False,p199_T60_s0.json
+462,44-72-25-7,61,2,rare,30.0,0,72 - 25 - 7 + 44,True,False,6.805,275,2,False,p462_T30_s0.json
+462,44-72-25-7,61,2,rare,60.0,0,,False,True,60.367,2304,9,,p462_T60_s0.json
+221,93-1-10-29,31,20,common,30.0,0,Not Possible,True,False,21.304,835,4,,p221_T30_s0.json
+221,93-1-10-29,31,20,common,60.0,0,None,True,False,14.863,587,3,,p221_T60_s0.json
+471,73-86-73-43,86,18,common,30.0,0,73 + (73 - 43),True,False,18.726,736,3,False,p471_T30_s0.json
+471,73-86-73-43,86,18,common,60.0,0,Not possible,True,False,22.272,872,4,,p471_T60_s0.json
+136,6-70-62-6,28,30,common,30.0,0,,False,True,32.999,1280,5,,p136_T30_s0.json
+136,6-70-62-6,28,30,common,60.0,0,(70 - 62) * (6 + 6),True,False,5.084,204,1,False,p136_T60_s0.json
+220,41-4-69-30,92,22,common,30.0,0,"tag for the final expression would be:
+
+<answer>(69 / 30) * 41 - 4 = 90.3",True,False,16.674,657,3,,p220_T30_s0.json
+220,41-4-69-30,92,22,common,60.0,0,Not possible,True,False,14.811,585,3,,p220_T60_s0.json
+389,34-29-27-32,75,2,rare,30.0,0,None,True,False,15.537,613,3,,p389_T30_s0.json
+389,34-29-27-32,75,2,rare,60.0,0,,False,True,60.37,2304,9,,p389_T60_s0.json
+98,36-31-82-76,37,3,rare,30.0,0,Not possible,True,False,14.89,588,3,,p98_T30_s0.json
+98,36-31-82-76,37,3,rare,60.0,0,,False,True,60.37,2304,9,,p98_T60_s0.json
+400,14-35-34-78,27,2,rare,30.0,0,Not possible,True,False,25.494,995,4,,p400_T30_s0.json
+400,14-35-34-78,27,2,rare,60.0,0,(35 - 14) * (78 / 34),True,False,25.73,1004,4,False,p400_T60_s0.json
+403,3-56-9-93,96,16,common,30.0,0,(9 * (56 - 93) + 3),True,False,17.554,691,3,False,p403_T30_s0.json
+403,3-56-9-93,96,16,common,60.0,0,93 - 56 + 9 * 3,True,False,16.207,639,3,False,p403_T60_s0.json
+68,87-35-64-6,59,12,med,30.0,0,64 - 35 + (87 / 6),True,False,10.645,423,2,False,p68_T30_s0.json
+68,87-35-64-6,59,12,med,60.0,0,None,True,False,16.001,631,3,,p68_T60_s0.json
+265,95-18-2-82,72,12,med,30.0,0,(95 - 18 * 2),True,False,15.302,604,3,False,p265_T30_s0.json
+265,95-18-2-82,72,12,med,60.0,0,,False,True,60.367,2304,9,,p265_T60_s0.json
+176,63-59-12-83,86,3,rare,30.0,0,83 - 59 + 12 + 6,True,False,19.351,760,3,False,p176_T30_s0.json
+176,63-59-12-83,86,3,rare,60.0,0,,False,True,60.37,2304,9,,p176_T60_s0.json
+236,90-17-22-2,96,10,med,30.0,0,2 * 22 + 2 * 17 + 7 * 2,True,False,9.929,395,2,False,p236_T30_s0.json
+236,90-17-22-2,96,10,med,60.0,0,90 + 22 - 17 + 2,True,False,23.631,924,4,False,p236_T60_s0.json
+255,51-66-10-66,62,32,common,30.0,0,,False,True,33.003,1280,5,,p255_T30_s0.json
+255,51-66-10-66,62,32,common,60.0,0,(66 - 51 + 10,True,False,33.003,1280,5,,p255_T60_s0.json
+194,28-44-41-42,16,24,common,30.0,0,None,True,False,16.028,632,3,,p194_T30_s0.json
+194,28-44-41-42,16,24,common,60.0,0,44 - 28,True,False,3.333,134,1,False,p194_T60_s0.json

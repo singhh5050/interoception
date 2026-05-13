@@ -33,8 +33,8 @@ from interoception.tasks import PROBLEMS, load_problems
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser()
-    p.add_argument("--hf-model", default="Qwen/Qwen2.5-Math-7B-Instruct")
-    p.add_argument("--sim-model", default="Qwen2.5-7B")
+    p.add_argument("--hf-model", default="Qwen/Qwen2.5-14B-Instruct")
+    p.add_argument("--sim-model", default="Qwen2.5-14B")
     p.add_argument("--hardware", default="H100_SXM")
     p.add_argument("--target-s", type=float, nargs="+", default=[15.0, 30.0, 60.0, 120.0])
     # Two ways to pick problems:
