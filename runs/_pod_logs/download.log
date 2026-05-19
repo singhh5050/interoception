@@ -1,0 +1,12 @@
+=== Qwen/Qwen2.5-3B-Instruct ===
+Fetching 12 files:   0%|          | 0/12 [00:00<?, ?it/s]Fetching 12 files: 100%|██████████| 12/12 [00:00<00:00, 4156.21it/s]
+  OK in 0s -> /workspace/hf-cache/models--Qwen--Qwen2.5-3B-Instruct/snapshots/aa8e72537993ba99e69dfaafa59ed015b17504d1
+=== Qwen/Qwen3-4B-Instruct-2507 ===
+Fetching 13 files:   0%|          | 0/13 [00:00<?, ?it/s]Fetching 13 files: 100%|██████████| 13/13 [00:00<00:00, 2133.34it/s]
+  OK in 0s -> /workspace/hf-cache/models--Qwen--Qwen3-4B-Instruct-2507/snapshots/cdbee75f17c01a7cc42f958dc650907174af0554
+=== google/gemma-4-E4B-it ===
+Fetching 9 files:   0%|          | 0/9 [00:00<?, ?it/s]Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+Fetching 9 files:  11%|█         | 1/9 [00:00<00:02,  3.58it/s]Fetching 9 files:  67%|██████▋   | 6/9 [00:28<00:14,  4.94s/it]Fetching 9 files: 100%|██████████| 9/9 [00:28<00:00,  3.14s/it]
+  OK in 28s -> /workspace/hf-cache/models--google--gemma-4-E4B-it/snapshots/d6436b3d62967e1af08bbb046c6300b2a9ae8e85
+DONE_DOWNLOAD
+GEMMA_DL_DONE
