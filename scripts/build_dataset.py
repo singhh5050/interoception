@@ -93,9 +93,13 @@ def main() -> None:
     args.out_dir.mkdir(parents=True, exist_ok=True)
     rng = random.Random(args.seed)
 
-    # Import solver after argparse so --help is fast.
-    sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
-    from interoception.solver import solve
+    # Import solver after argparse so --help is fast. The solver lives inside
+    # the env package as `_solver.py`; this script reaches in directly rather
+    # than depending on the env package install.
+    sys.path.insert(
+        0, str(Path(__file__).parent.parent / "environments" / "interoception_countdown")
+    )
+    from _solver import solve
 
     parquet_path = download_parquet(args.cache)
     print(f"loading 4-num rows from {parquet_path}")
