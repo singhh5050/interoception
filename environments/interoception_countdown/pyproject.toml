@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "interoception-countdown"
+version = "0.1.0"
+description = "Countdown under a wallclock budget — verifiers MultiTurnEnv for testing whether LLMs use elapsed-time signals."
+requires-python = ">=3.10"
+dependencies = [
+    "verifiers",
+    "datasets",
+    "pydantic>=2",
+]
+
+[project.optional-dependencies]
+# hwprop is only needed when timing_source="sim" — useful for RL (deterministic
+# per-rollout cost, counterfactual hardware). Install separately from a sibling
+# checkout per the top-level README, or pin it here if published.
+sim = ["hwprop"]
+
+[tool.setuptools]
+py-modules = ["interoception_countdown", "_solver"]

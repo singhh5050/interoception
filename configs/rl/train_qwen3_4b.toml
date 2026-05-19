@@ -1,0 +1,65 @@
+# RL training run for interoception-countdown on Qwen3-4B-Instruct-2507.
+# Patterned from prime-rl's configs/gsm8k/rl.toml and configs/hendrycks_math/rl.toml.
+#
+# Launch:
+#   uv run trainer @ configs/rl/train_qwen3_4b.toml
+#
+# Prerequisite: the env must be installed first:
+#   prime env install ./environments/interoception_countdown
+#
+# Compute target: 1× A100 80GB. For multi-node scale-up see prime-rl docs.
+
+max_steps = 100
+seq_len = 4096          # Countdown rollouts run to ~2-3k tokens incl. injected user msgs
+
+[wandb]
+project = "interoception"
+name = "qwen3-4b-rl"
+
+[model]
+name = "Qwen/Qwen3-4B-Instruct-2507"
+
+[orchestrator]
+batch_size = 64
+rollouts_per_example = 4   # GRPO group size — matches rl_train.py default
+
+[orchestrator.train.sampling]
+max_completion_tokens = 2048
+
+# Training env: log-uniform budget sampling per rollout + sim timing for determinism
+# (cleaner GRPO baselines, counterfactual hardware, decoupled from training wall time).
+[[orchestrator.train.env]]
+id = "interoception-train"
+name = "interoception-countdown"
+args = { problems_jsonl = "data/train.jsonl", target_s_min = 15.0, target_s_max = 120.0, timing_source = "sim", hardware = "A100_80GB", sim_model = "Qwen3-4B" }
+
+[orchestrator.buffer]
+easy_threshold = 1.5    # filter trivially-solved rollouts (correct + max speed bonus ~2.0)
+hard_threshold = -1.0   # keep everything except pathological negative-reward groups
+
+[orchestrator.eval]
+interval = 10           # eval every 10 training steps
+
+[orchestrator.eval.sampling]
+max_completion_tokens = 2048
+
+# Eval env: fixed budgets to match the baseline sweep methodology (T=30s and T=60s).
+# We pin min == max so setup_state's "use preset target_s" branch fires.
+# Eval uses real timing (default) — most honest comparison to held-out deployment.
+[[orchestrator.eval.env]]
+id = "interoception-eval-t30"
+name = "interoception-countdown"
+num_examples = 50
+rollouts_per_example = 1
+args = { problems_jsonl = "data/eval.jsonl", target_s_min = 30.0, target_s_max = 30.0 }
+
+[[orchestrator.eval.env]]
+id = "interoception-eval-t60"
+name = "interoception-countdown"
+num_examples = 50
+rollouts_per_example = 1
+args = { problems_jsonl = "data/eval.jsonl", target_s_min = 60.0, target_s_max = 60.0 }
+
+[trainer]  # use defaults (incl. LoRA wiring — confirm against prime-rl docs before first launch)
+
+[inference]  # use defaults
