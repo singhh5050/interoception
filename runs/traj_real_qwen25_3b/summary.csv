@@ -1,0 +1,21 @@
+problem_idx,numbers,target,solution_count,difficulty_band,target_s,seed,answer,answer_emitted,timed_out,elapsed_s,total_output_tokens,n_assistant_turns,correct,run_file
+315,86-1-93-6,42,39,common,30.0,0,None,True,False,5.63,702,3,,p315_T30_s0.json
+315,86-1-93-6,42,39,common,60.0,0,86 - 93 / 6,True,False,3.374,495,2,False,p315_T60_s0.json
+256,81-80-6-79,83,3,rare,30.0,0,,False,True,30.209,4352,17,,p256_T30_s0.json
+256,81-80-6-79,83,3,rare,60.0,0,81 - 80 + 6 * 79 / 1,True,False,5.819,853,5,False,p256_T60_s0.json
+131,10-7-78-4,37,4,med,30.0,0,10 * 4 - (78 - 74),True,False,2.671,392,2,False,p131_T30_s0.json
+131,10-7-78-4,37,4,med,60.0,0,,False,False,57.264,8192,32,,p131_T60_s0.json
+58,43-84-38-47,67,2,rare,30.0,0,,False,True,30.029,4352,17,,p58_T30_s0.json
+58,43-84-38-47,67,2,rare,60.0,0,None of the valid expressions found result in 67.,True,False,5.97,873,4,,p58_T60_s0.json
+247,9-39-10-56,59,3,rare,30.0,0,39 + 10 * 2,True,False,4.557,669,3,False,p247_T30_s0.json
+247,9-39-10-56,59,3,rare,60.0,0,None,True,False,6.489,953,4,,p247_T60_s0.json
+304,75-9-81-39,77,3,rare,30.0,0,(9 * 8) + 39 - 75 = 77,True,False,0.418,61,1,,p304_T30_s0.json
+304,75-9-81-39,77,3,rare,60.0,0,None possible given constraints,True,False,4.912,722,3,,p304_T60_s0.json
+64,41-96-93-22,21,4,med,30.0,0,(41 - 22) * 3 + (96 - 51) - 21,True,False,3.359,494,2,False,p64_T30_s0.json
+64,41-96-93-22,21,4,med,60.0,0,93 - (22 * 3),True,False,3.12,459,2,False,p64_T60_s0.json
+262,30-8-58-10,63,14,common,30.0,0,Not possible,True,False,4.946,727,3,,p262_T30_s0.json
+262,30-8-58-10,63,14,common,60.0,0,,True,False,1.74,256,1,,p262_T60_s0.json
+69,59-14-60-77,14,12,med,30.0,0,Not possible,True,False,7.519,1103,5,,p69_T30_s0.json
+69,59-14-60-77,14,12,med,60.0,0,14,True,False,2.242,329,2,False,p69_T60_s0.json
+382,48-22-78-40,98,2,rare,30.0,0,78 - 40 + 22 + 24,True,False,2.363,347,2,False,p382_T30_s0.json
+382,48-22-78-40,98,2,rare,60.0,0,78 - 48 + 22 * 4,True,False,3.388,498,2,False,p382_T60_s0.json

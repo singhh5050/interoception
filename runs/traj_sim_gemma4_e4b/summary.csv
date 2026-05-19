@@ -1,0 +1,21 @@
+problem_idx,numbers,target,solution_count,difficulty_band,target_s,seed,answer,answer_emitted,timed_out,elapsed_s,total_output_tokens,n_assistant_turns,correct,run_file
+315,86-1-93-6,42,39,common,30.0,0,(93 - 86) * 6 * 1,True,False,33.429,1009,4,True,p315_T30_s0.json
+315,86-1-93-6,42,39,common,60.0,0,(93 - 86) * (6 * 1),True,False,38.503,1162,5,True,p315_T60_s0.json
+256,81-80-6-79,83,3,rare,30.0,0,,False,True,33.926,1024,4,,p256_T30_s0.json
+256,81-80-6-79,83,3,rare,60.0,0,80 + (6 / (81 - 79)),True,False,37.143,1121,5,True,p256_T60_s0.json
+131,10-7-78-4,37,4,med,30.0,0,,False,True,33.926,1024,4,,p131_T30_s0.json
+131,10-7-78-4,37,4,med,60.0,0,,False,True,67.947,2048,8,,p131_T60_s0.json
+58,43-84-38-47,67,2,rare,30.0,0,,False,True,33.926,1024,4,,p58_T30_s0.json
+58,43-84-38-47,67,2,rare,60.0,0,,False,True,67.948,2048,8,,p58_T60_s0.json
+247,9-39-10-56,59,3,rare,30.0,0,,False,True,33.926,1024,4,,p247_T30_s0.json
+247,9-39-10-56,59,3,rare,60.0,0,,False,True,67.948,2048,8,,p247_T60_s0.json
+304,75-9-81-39,77,3,rare,30.0,0,,False,True,33.926,1024,4,,p304_T30_s0.json
+304,75-9-81-39,77,3,rare,60.0,0,,False,True,67.948,2048,8,,p304_T60_s0.json
+64,41-96-93-22,21,4,med,30.0,0,,False,True,33.926,1024,4,,p64_T30_s0.json
+64,41-96-93-22,21,4,med,60.0,0,,False,True,67.948,2048,8,,p64_T60_s0.json
+262,30-8-58-10,63,14,common,30.0,0,58 + (8 - (30 / 10)),True,False,20.011,604,3,True,p262_T30_s0.json
+262,30-8-58-10,63,14,common,60.0,0,58 + (8 - (30 / 10)),True,False,20.044,605,3,True,p262_T60_s0.json
+69,59-14-60-77,14,12,med,30.0,0,,False,True,33.926,1024,4,,p69_T30_s0.json
+69,59-14-60-77,14,12,med,60.0,0,,False,True,67.948,2048,8,,p69_T60_s0.json
+382,48-22-78-40,98,2,rare,30.0,0,,False,True,33.926,1024,4,,p382_T30_s0.json
+382,48-22-78-40,98,2,rare,60.0,0,,False,True,67.948,2048,8,,p382_T60_s0.json

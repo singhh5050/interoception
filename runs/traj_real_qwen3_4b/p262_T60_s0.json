@@ -1,0 +1,75 @@
+{
+  "args": {
+    "hf_model": "Qwen/Qwen3-4B-Instruct-2507",
+    "sim_model": "Qwen2.5-14B",
+    "hardware": "H100_SXM",
+    "target_s": [
+      30.0,
+      60.0
+    ],
+    "problems_file": "data/eval.jsonl",
+    "num_problems": 10,
+    "sample_seed": 0,
+    "problems": null,
+    "seeds": [
+      0
+    ],
+    "chunk_tokens": 256,
+    "max_turns": 32,
+    "temperature": 0.7,
+    "prompt_style": "default",
+    "max_model_len": null,
+    "realtime": true,
+    "out_dir": "runs/traj_real_qwen3_4b"
+  },
+  "problem_idx": 262,
+  "problem": {
+    "numbers": [
+      30,
+      8,
+      58,
+      10
+    ],
+    "target": 63
+  },
+  "target_s": 60.0,
+  "seed": 0,
+  "answer": "(58 + 8) - (30 / 10)",
+  "answer_emitted": true,
+  "timed_out": false,
+  "elapsed_s": 2.0219757948070765,
+  "total_output_tokens": 276,
+  "correct": true,
+  "turns": [
+    {
+      "role": "system",
+      "content": "You are solving a problem under a wallclock time budget.\nYour budget is 60 seconds.\nBetween your turns the user will inject messages of the form \"[X seconds elapsed]\" telling you how much wallclock time has passed.\nYou should pace yourself: think when there is time, commit to an answer when time runs short. When you are ready, output your final answer inside <answer>...</answer> tags. Anything after </answer> is ignored.",
+      "output_tokens": 0,
+      "elapsed_s_at_end": 0.0
+    },
+    {
+      "role": "user",
+      "content": "Using the numbers [30, 8, 58, 10] and the operators +, -, *, / (each number used exactly once), find an expression that equals 63. Show your reasoning, then put the final expression inside <answer>...</answer>.",
+      "output_tokens": 0,
+      "elapsed_s_at_end": 0.0
+    },
+    {
+      "role": "assistant",
+      "content": "We are given the numbers: **30, 8, 58, 10**  \nWe must use **each number exactly once** and use **only the operators +, \u2212, \u00d7, \u00f7** to make an expression that equals **63**.\n\n---\n\n### Step 1: Try to get close to 63\n63 is a fairly large number. Let's see combinations:\n\nTry:\n- 58 + 8 = 66 \u2192 66 \u2212 3 = 63 \u2192 need to make 3 from 30 and 10?  \n  30 \u2212 10 = 20 \u2192 too big  \n  30 \u00f7 10 = 3 \u2192 oh! That's promising.\n\nSo:\n- 58 + 8 = 66  \n- 30 \u00f7 10 = 3  \n- 66 \u2212 3 = 63 \u2705\n\nUsed: 58, 8, 30, 10 \u2192 all numbers used once.\n\nOperators: +, \u2212, \u00f7 \u2192 all allowed.\n\n---\n\n### Expression:\n(58 + 8) \u2212 (30 \u00f7 10)",
+      "output_tokens": 256,
+      "elapsed_s_at_end": 1.8713955518323928
+    },
+    {
+      "role": "user",
+      "content": "[1.9s elapsed]",
+      "output_tokens": 0,
+      "elapsed_s_at_end": 1.8713955518323928
+    },
+    {
+      "role": "assistant",
+      "content": "<answer>(58 + 8) - (30 / 10)</answer>",
+      "output_tokens": 20,
+      "elapsed_s_at_end": 2.0219757948070765
+    }
+  ]
+}

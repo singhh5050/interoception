@@ -1,0 +1,21 @@
+problem_idx,numbers,target,solution_count,difficulty_band,target_s,seed,answer,answer_emitted,timed_out,elapsed_s,total_output_tokens,n_assistant_turns,correct,run_file
+315,86-1-93-6,42,39,common,30.0,0,(93 - 86) * 6 * 1,True,False,3.316,445,2,True,p315_T30_s0.json
+315,86-1-93-6,42,39,common,60.0,0,6 × (93 - 86) × 1,True,False,4.421,606,3,,p315_T60_s0.json
+256,81-80-6-79,83,3,rare,30.0,0,(6 / (81 - 79)) + 80,True,False,9.135,1242,5,True,p256_T30_s0.json
+256,81-80-6-79,83,3,rare,60.0,0,81 + (80 - 79) + (6 / 6),True,False,30.676,4048,16,False,p256_T60_s0.json
+131,10-7-78-4,37,4,med,30.0,0,,False,True,30.972,4096,16,,p131_T30_s0.json
+131,10-7-78-4,37,4,med,60.0,0,(78 - (10 + 4)) - 7 = 64 - 7 = 57,True,False,49.319,6393,25,,p131_T60_s0.json
+58,43-84-38-47,67,2,rare,30.0,0,no solution,True,False,28.386,3752,15,,p58_T30_s0.json
+58,43-84-38-47,67,2,rare,60.0,0,(84 - 47) + (43 - 38) = 37 + 5 = 42</answer,True,False,35.103,4608,18,,p58_T60_s0.json
+247,9-39-10-56,59,3,rare,30.0,0,56 + ((39 - 9) / 10),True,False,6.401,870,4,True,p247_T30_s0.json
+247,9-39-10-56,59,3,rare,60.0,0,,True,False,45.312,5888,23,,p247_T60_s0.json
+304,75-9-81-39,77,3,rare,30.0,0,81 - ((75 - 39) / 9) = 77,True,False,13.173,1775,7,,p304_T30_s0.json
+304,75-9-81-39,77,3,rare,60.0,0,81 - (75 - (39 - 9)),True,False,40.603,5301,21,False,p304_T60_s0.json
+64,41-96-93-22,21,4,med,30.0,0,(41 + 22) ÷ (96 - 93),True,False,10.151,1372,6,,p64_T30_s0.json
+64,41-96-93-22,21,4,med,60.0,0,(41 + 22) ÷ (96 - 93) = 21,True,False,12.964,1748,7,,p64_T60_s0.json
+262,30-8-58-10,63,14,common,30.0,0,(58 + 8) - (30 / 10) = 63,True,False,6.668,907,4,,p262_T30_s0.json
+262,30-8-58-10,63,14,common,60.0,0,(58 + 8) - (30 / 10),True,False,2.022,276,2,True,p262_T60_s0.json
+69,59-14-60-77,14,12,med,30.0,0,,False,True,31.076,4096,16,,p69_T30_s0.json
+69,59-14-60-77,14,12,med,60.0,0,14 × (60 - 59),True,False,34.992,4591,18,,p69_T60_s0.json
+382,48-22-78-40,98,2,rare,30.0,0,,False,True,31.078,4096,16,,p382_T30_s0.json
+382,48-22-78-40,98,2,rare,60.0,0,no solution,True,False,49.513,6400,25,,p382_T60_s0.json

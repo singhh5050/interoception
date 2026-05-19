@@ -1,0 +1,21 @@
+problem_idx,numbers,target,solution_count,difficulty_band,target_s,seed,answer,answer_emitted,timed_out,elapsed_s,total_output_tokens,n_assistant_turns,correct,run_file
+315,86-1-93-6,42,39,common,30.0,0,93 + 6 - (57 - 1),True,False,23.296,683,3,False,p315_T30_s0.json
+315,86-1-93-6,42,39,common,60.0,0,\( 93 - 6 * 42 / 86 \),True,False,14.236,417,2,,p315_T60_s0.json
+256,81-80-6-79,83,3,rare,30.0,0,,False,True,34.914,1024,4,,p256_T30_s0.json
+256,81-80-6-79,83,3,rare,60.0,0,None,True,False,46.874,1375,6,,p256_T60_s0.json
+131,10-7-78-4,37,4,med,30.0,0,,False,True,34.914,1024,4,,p131_T30_s0.json
+131,10-7-78-4,37,4,med,60.0,0,None,True,False,28.474,835,4,,p131_T60_s0.json
+58,43-84-38-47,67,2,rare,30.0,0,,False,True,34.914,1024,4,,p58_T30_s0.json
+58,43-84-38-47,67,2,rare,60.0,0,Not Possible,True,False,19.754,579,3,,p58_T60_s0.json
+247,9-39-10-56,59,3,rare,30.0,0,,False,True,33.619,986,4,,p247_T30_s0.json
+247,9-39-10-56,59,3,rare,60.0,0,(56 - 9) + 10,True,False,19.856,582,3,False,p247_T60_s0.json
+304,75-9-81-39,77,3,rare,30.0,0,(9 * 8) + 39 - 75 = 77,True,False,2.112,61,1,,p304_T30_s0.json
+304,75-9-81-39,77,3,rare,60.0,0,,False,True,61.087,1792,7,,p304_T60_s0.json
+64,41-96-93-22,21,4,med,30.0,0,96 - (22 * 3) - 9,True,False,29.565,867,4,False,p64_T30_s0.json
+64,41-96-93-22,21,4,med,60.0,0,93 - 72,True,False,24.523,719,3,False,p64_T60_s0.json
+262,30-8-58-10,63,14,common,30.0,0,58 - (8 - 10) + 30,True,False,16.552,485,2,False,p262_T30_s0.json
+262,30-8-58-10,63,14,common,60.0,0,,True,False,8.752,256,1,,p262_T60_s0.json
+69,59-14-60-77,14,12,med,30.0,0,"There is no valid expression using the numbers [59, 14, 60, 77] and the operations +, -, *, / exactly once that equals 14.",True,False,23.569,691,3,,p69_T30_s0.json
+69,59-14-60-77,14,12,med,60.0,0,14,True,False,17.744,520,3,False,p69_T60_s0.json
+382,48-22-78-40,98,2,rare,30.0,0,78 - 40 + 22 + 4,True,False,13.01,381,2,False,p382_T30_s0.json
+382,48-22-78-40,98,2,rare,60.0,0,...,True,False,16.007,469,2,,p382_T60_s0.json
