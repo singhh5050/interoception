@@ -8,40 +8,45 @@ Task: 4-number Countdown problems (use +/-/×/÷ with each number exactly once t
 
 ```
 environments/interoception_countdown/   # verifiers MultiTurnEnv package
-configs/rl/train_qwen3_4b.toml          # prime-rl training config
-configs/eval/README.md                  # prime eval run howto
+configs/rl/phase1_{hyp,exp}_s{0,1}.toml # Phase 1 sweep: 2 reward shapes × 2 seeds
+configs/rl/smoke.toml                   # 5-step pipeline check (Modal)
+scripts/dev/render_phase1_tomls.py      # template generator for the 4 phase1 TOMLs
+scripts/dev/bundle_phase1_audit.py      # regenerate phase1_audit.txt audit bundle
+scripts/dev/patch_prime_rl_pyproject.py # drops missing workspace members at image build
 scripts/build_dataset.py                # rebuild data/{train,eval}.jsonl
 data/{train,eval}.jsonl                 # stratified Countdown problems
+modal_app.py                            # Modal app: smoke (1 run) + phase1 (4-run fanout)
 runs/                                   # historical sweep + reproduction outputs
 ```
 
-The env subclasses `vf.MultiTurnEnv`. It injects `[X seconds elapsed]` between model turns where `X` comes from either real per-turn wallclock (default, eval) or `hwprop.simulate_latency` (opt-in, RL). Reward decomposes into four buckets — correct (+ speed bonus), wrong, quit, timeout — with the asymmetric weighting from the original experiment.
+The env subclasses `vf.MultiTurnEnv`. It injects `[X seconds elapsed]` between model turns where `X` comes from either real per-turn wallclock (default, eval) or `hwprop.simulate_latency` (opt-in, RL). Reward is `c · f(t, T) + 0.05 · is_parseable_answer`, where `f` is one of `hyperbolic` (`T/min(t, 5T)` past T) or `exponential` (`exp(-(t-T)/T)` past T). Each problem is assigned a single `target_s` at dataset load time (deterministic in `dataset_seed`), so all GRPO group rollouts of one problem share T — required for valid advantage estimation.
 
 ## Install
 
 ```bash
-# Env package only (real-timing mode):
-pip install -e environments/interoception_countdown
-
-# Add simulator (for RL training with deterministic per-rollout cost):
 pip install -e environments/interoception_countdown[sim]
-# hwprop is currently a sibling checkout; see https://github.com/singhh5050/hardware-proprioception
+# sim extra pulls hwprop. For real-timing-only eval, drop the [sim] extra.
 ```
 
 ## Run
 
 ```bash
-# Rebuild the dataset (one-time)
+# Rebuild dataset (one-time)
 python scripts/build_dataset.py --out-dir data
 
-# Eval a model on the env
-prime eval run --env interoception-countdown --model Qwen/Qwen3-4B-Instruct-2507 \
-  --env-args '{"problems_jsonl":"data/eval.jsonl","target_s_min":30,"target_s_max":30}' \
-  --num-examples 50
+# RL training via Modal (prime-rl pinned at SHA b22e768)
+modal run modal_app.py::smoke               # 5-step plumbing check, ~7 min
+modal run --detach modal_app.py::phase1     # 4-run sweep, ~80-100 min each, parallel
 
-# RL training (prime-rl)
-uv run trainer @ configs/rl/train_qwen3_4b.toml
+# Local eval
+prime eval run --env interoception-countdown --model Qwen/Qwen2.5-3B-Instruct \
+  --env-args '{"problems_jsonl":"data/eval.jsonl","target_s_min":30,"target_s_max":30}' \
+  --num-examples 100
 ```
+
+Modal env vars expected: `MODAL_TOKEN_ID`, `MODAL_TOKEN_SECRET` (in `.env`), plus a `wandb` Modal secret. The image clones prime-rl + hwprop + installs the env package; resolved configs land at `/cache/runs/<run>/configs/` on the `interoception-cache` volume.
+
+When iterating on Phase 1 hyperparameters, edit `scripts/dev/render_phase1_tomls.py` and re-run it — the four TOMLs are guaranteed to differ only in `(shape, seed)`.
 
 ## Findings so far
 

@@ -1,0 +1,85 @@
+# Smoke run on prime-rl. Mirrors phase1 LoRA + optim wiring on a 5-step budget
+# so we validate the FULL phase1 pipeline (LoRA application, kl_tau, scheduler,
+# eval reward args, per-row target_s) end-to-end, not just the rollout loop.
+# Goal: 5 steps + 1 eval tick, ~5-10 min wall.
+
+max_steps = 5
+seq_len = 8192
+output_dir = "/cache/runs/smoke-001"
+
+# Top-level [ckpt] triggers auto_setup_ckpt -> creates trainer.ckpt AND
+# orchestrator.ckpt (validator requires both when either is set).
+[ckpt]
+
+[wandb]
+project = "interoception"
+name = "smoke-001"
+
+[model]
+name = "Qwen/Qwen2.5-3B-Instruct"
+
+# LoRA wiring. Only [trainer.model.lora] is required; auto_setup_lora at
+# rl.py:718 propagates to orchestrator.model.lora and inference.enable_lora.
+[trainer.model.lora]
+rank = 32
+alpha = 32.0
+dropout = 0.0
+target_modules = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+
+[trainer.ckpt.weights]
+save_adapter_separately = true
+
+[trainer.optim]
+type = "adamw"
+lr = 5e-5
+max_norm = 1.0
+betas1 = 0.9
+betas2 = 0.999
+weight_decay = 0.01
+
+[trainer.loss]
+type = "default"  # discriminated union — required so pydantic picks DefaultLossConfig
+kl_tau = 1e-3
+
+[trainer.scheduler]
+# Constant LR for the 5-step smoke. The linear scheduler with warmup_steps=1
+# and decay_steps=1 against max_steps=5 builds a degenerate SequentialLR
+# whose constant-phase sub-scheduler has total_iters=0 -> ZeroDivisionError
+# in torch's LinearLR._get_closed_form_lr at step 3. Phase1 (max_steps=200)
+# uses [trainer.scheduler] type="linear" with warmup_steps=10, decay_steps=10
+# which has plenty of headroom and avoids the issue.
+type = "constant"
+
+[orchestrator]
+batch_size = 4
+rollouts_per_example = 2     # tiny GRPO group for fast smoke
+seed = 0
+
+[orchestrator.train.sampling]
+max_completion_tokens = 256  # Track A chunk size — forces multi-turn rollouts
+temperature = 1.0
+
+[[orchestrator.train.env]]
+id = "interoception-countdown"
+name = "interoception-train-smoke"
+args = { problems_jsonl = "/root/data/train.jsonl", target_s_min = 15.0, target_s_max = 60.0, dataset_seed = 0, timing_source = "sim", hardware = "A100_80GB", sim_model = "Qwen2.5-3B", max_turns = 8, reward_shape = "exponential", attempt_bonus = 0.05, max_time_multiplier = 5.0 }
+
+[orchestrator.eval]
+interval = 5
+
+[orchestrator.eval.sampling]
+max_completion_tokens = 256
+temperature = 0.0
+
+# Eval must pass reward_shape so it matches what we trained on. Without this,
+# eval falls back to the env's default ("hyperbolic"), silently mismatched.
+[[orchestrator.eval.env]]
+id = "interoception-countdown"
+name = "interoception-eval-smoke"
+num_examples = 5
+rollouts_per_example = 1
+args = { problems_jsonl = "/root/data/eval.jsonl", target_s_min = 30.0, target_s_max = 30.0, max_turns = 8, reward_shape = "exponential", attempt_bonus = 0.05, max_time_multiplier = 5.0 }
+
+[inference]
+# enable_lora auto-set by auto_setup_lora when [trainer.model.lora] is present.
+enable_fp32_lm_head = true

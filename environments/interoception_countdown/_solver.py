@@ -16,8 +16,15 @@ intermediates allowed). This matches the convention in the Jiayi-Pan dataset.
 from __future__ import annotations
 
 import ast
+import re
 from dataclasses import dataclass
 from typing import Iterable, Sequence
+
+# Strips `= 32` (and similar) off the right side of an expression. Models
+# routinely emit `(3+5)*4 = 32` inside <answer> tags; without this the AST
+# parser sees a SyntaxError and the answer is bucketed as "quit", silently
+# poisoning the reward signal on correct answers.
+_TRAILING_EQUALS_RE = re.compile(r"\s*=\s*[-+\d./*\s()]+\s*$")
 
 OPS: tuple[tuple[str, callable], ...] = (
     ("+", lambda a, b: a + b),
@@ -98,6 +105,7 @@ def validate_solution(expr_str: str | None, nums: Sequence[int], target: int) ->
     if expr_str is None:
         return None
     expr = expr_str.strip().strip("`").strip()
+    expr = _TRAILING_EQUALS_RE.sub("", expr)
     if not expr:
         return None
     try:
@@ -127,3 +135,35 @@ def validate_solution(expr_str: str | None, nums: Sequence[int], target: int) ->
     if not isinstance(value, (int, float)):
         return None
     return abs(value - float(target)) < _TOL
+
+
+def is_parseable_arithmetic(expr_str: str | None) -> bool:
+    """True if `expr_str` parses as a valid arithmetic expression of integer
+    literals + +/-/*/÷, regardless of the multiset / target constraints.
+
+    Used for the "attempt bonus" in the new reward shape: we want to reward
+    the model for committing ANY parseable expression (even one that uses
+    numbers not in the input) over quitting / outputting prose / timing out.
+    """
+    if expr_str is None:
+        return False
+    expr = expr_str.strip().strip("`").strip()
+    expr = _TRAILING_EQUALS_RE.sub("", expr)
+    if not expr:
+        return False
+    try:
+        tree = ast.parse(expr, mode="eval")
+    except SyntaxError:
+        return False
+    for node in ast.walk(tree):
+        if not isinstance(node, _VALIDATOR_ALLOWED_NODES):
+            return False
+        if isinstance(node, ast.Constant):
+            v = node.value
+            if isinstance(v, bool) or not isinstance(v, (int, float)):
+                return False
+    try:
+        value = eval(compile(tree, "<expr>", "eval"), {"__builtins__": {}}, {})
+    except Exception:
+        return False
+    return isinstance(value, (int, float))
