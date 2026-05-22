@@ -1,8 +1,8 @@
-"""Bundle every file relevant to a Phase 1 launch into a single audit txt.
+"""Bundle every file relevant to a sweep launch into a single audit txt.
 
-Designed to be handed to a second agent for review before burning ~6 hours of
-GPU on 4 parallel Modal runs. The bundle is regenerated whenever any of the
-constituent files change; do not edit phase1_audit.txt by hand.
+Designed to be handed to a second agent for review before burning ~5 hours of
+parallel GPU on 12 Modal runs. The bundle is regenerated whenever any of the
+constituent files change; do not edit sweep_audit.txt by hand.
 """
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from pathlib import Path
 from datetime import datetime
 
 ROOT = Path(__file__).resolve().parents[2]
-OUT = ROOT / "phase1_audit.txt"
+OUT = ROOT / "sweep_audit.txt"
 
 # Order matters: highest-stakes files first so an auditor opening the bundle
 # sees the showstopper-class code (env + TOMLs) before the surrounding infra.
@@ -20,35 +20,47 @@ FILES = [
     "environments/interoception_countdown/__init__.py",
     "environments/interoception_countdown/pyproject.toml",
     "environments/interoception_countdown/README.md",
-    "configs/rl/phase1_hyp_s0.toml",
-    "configs/rl/phase1_hyp_s1.toml",
-    "configs/rl/phase1_exp_s0.toml",
-    "configs/rl/phase1_exp_s1.toml",
+    # Phase 1: Qwen2.5-3B
+    "configs/rl/phase1_qwen25_3b_hyp_s0.toml",
+    "configs/rl/phase1_qwen25_3b_hyp_s1.toml",
+    "configs/rl/phase1_qwen25_3b_exp_s0.toml",
+    "configs/rl/phase1_qwen25_3b_exp_s1.toml",
+    # Phase 2a: Qwen3-4B
+    "configs/rl/phase2_qwen3_4b_hyp_s0.toml",
+    "configs/rl/phase2_qwen3_4b_hyp_s1.toml",
+    "configs/rl/phase2_qwen3_4b_exp_s0.toml",
+    "configs/rl/phase2_qwen3_4b_exp_s1.toml",
+    # Phase 2b: gemma-4-E4B
+    "configs/rl/phase2_gemma4_e4b_hyp_s0.toml",
+    "configs/rl/phase2_gemma4_e4b_hyp_s1.toml",
+    "configs/rl/phase2_gemma4_e4b_exp_s0.toml",
+    "configs/rl/phase2_gemma4_e4b_exp_s1.toml",
     "configs/rl/smoke.toml",
-    "scripts/dev/render_phase1_tomls.py",
+    "scripts/dev/render_sweep_tomls.py",
     "scripts/dev/patch_prime_rl_pyproject.py",
     "modal_app.py",
 ]
 
 PREAMBLE = """\
 ================================================================================
-PHASE 1 AUDIT BUNDLE
+SWEEP AUDIT BUNDLE
 ================================================================================
 
 Generated: {ts}
 
-You are reviewing the code and configs for a 4-run RL sweep. The goal of this
-audit is to catch bugs / silent failures BEFORE we launch and burn ~6 hours of
-A100-80GB time on broken runs.
+You are reviewing the code and configs for a 12-run RL sweep. The goal of this
+audit is to catch bugs / silent failures BEFORE we launch and burn ~5 hours of
+parallel A100-80GB time on broken runs.
 
 --------------------------------------------------------------------------------
 EXPERIMENTAL DESIGN
 --------------------------------------------------------------------------------
 
-Train Qwen2.5-3B-Instruct with LoRA (r=32, all attn+MLP) on Countdown puzzles
-under simulated wallclock budgets. Each problem comes with a target time T;
-between turns the env injects "[X seconds elapsed]" using hwprop-simulated
-latency. Model must learn to pace itself and emit <answer>EXPR</answer> in time.
+Train 3 instruct models with LoRA (r=32 alpha=32, all attn+MLP targets) on
+Countdown puzzles under simulated wallclock budgets. Each problem comes with a
+target time T; between turns the env injects "[X seconds elapsed]" using
+hwprop-simulated latency. Model must learn to pace itself and emit
+<answer>EXPR</answer> in time.
 
 Reward shape (the per-rollout score that GRPO normalizes):
     R(t, T) = c(answer) * f(t, T) + 0.05 * is_parseable_arithmetic(answer)
@@ -60,7 +72,30 @@ where c(answer) = 1 if correct else 0, and f is one of:
 Hard cutoff: rollout stops at t = 5T regardless. attempt_bonus=0.05 pulls the
 model from quit -> attempt (committing any parseable arithmetic, even wrong).
 
-Sweep matrix: (shape, seed) = {{hyperbolic, exponential}} x {{0, 1}} = 4 runs in parallel.
+--------------------------------------------------------------------------------
+SWEEP MATRIX (12 runs = 3 models x 2 shapes x 2 seeds)
+--------------------------------------------------------------------------------
+
+| model                          | baseline | sim_model    | role                  |
+| ------------------------------ | -------- | ------------ | --------------------- |
+| Qwen/Qwen2.5-3B-Instruct       |    ~0%   | Qwen2.5-3B   | weakest base (Phase 1)|
+| Qwen/Qwen3-4B-Instruct-2507    |   ~20%   | Qwen3-4B     | mid base    (Phase 2) |
+| google/gemma-4-E4B-it          | 25-35%   | Gemma-3-4B   | strongest   (Phase 2) |
+
+Each model x {{hyperbolic, exponential}} x {{seed 0, seed 1}} = 4 cells per model = 12 total.
+
+The original design (in conversation history pre-compaction) was 3 models x 2 shapes
+x 5 seeds = 30 runs, phased as Phase 1 (4-run validation) -> Phase 2 (26 more). This
+sweep launches Phase 1 + the cross-model cells together at 2 seeds per (model, shape)
+to hedge the Qwen2.5-3B-null-result risk (0% baseline -> sparse GRPO advantage).
+The remaining 18 seeds are a "Phase 2 finisher" added if/when results are clean.
+
+Phase / model naming in the configs:
+  phase1_qwen25_3b_*.toml    -> 4 runs (Phase 1, original validation cohort)
+  phase2_qwen3_4b_*.toml     -> 4 runs (Phase 2 - mid baseline)
+  phase2_gemma4_e4b_*.toml   -> 4 runs (Phase 2 - strongest baseline)
+
+Launch: modal run --detach modal_app.py::sweep
 
 --------------------------------------------------------------------------------
 INFRASTRUCTURE

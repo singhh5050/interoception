@@ -14,6 +14,7 @@ Architecture notes:
 
 Smoke run:    modal run modal_app.py::smoke
 Phase 1 (4x): modal run --detach modal_app.py::phase1
+Sweep (12x):  modal run --detach modal_app.py::sweep    # Phase 1 + 8 Phase 2 cells
 """
 import modal
 
@@ -146,13 +147,48 @@ def smoke():
 
 @app.local_entrypoint()
 def phase1():
+    """Phase 1 only — Qwen2.5-3B x {hyp, exp} x {s0, s1}. Kept for backward compat;
+    prefer `sweep` which launches Phase 1 + Phase 2 (10 cross-model cells) together."""
     cfgs = [
-        ("rl/phase1_hyp_s0.toml", "qwen25-3b-hyp-s0"),
-        ("rl/phase1_hyp_s1.toml", "qwen25-3b-hyp-s1"),
-        ("rl/phase1_exp_s0.toml", "qwen25-3b-exp-s0"),
-        ("rl/phase1_exp_s1.toml", "qwen25-3b-exp-s1"),
+        ("rl/phase1_qwen25_3b_hyp_s0.toml", "qwen25-3b-hyp-s0"),
+        ("rl/phase1_qwen25_3b_hyp_s1.toml", "qwen25-3b-hyp-s1"),
+        ("rl/phase1_qwen25_3b_exp_s0.toml", "qwen25-3b-exp-s0"),
+        ("rl/phase1_qwen25_3b_exp_s1.toml", "qwen25-3b-exp-s1"),
     ]
     print(f"Launching Phase 1: {len(cfgs)} runs in parallel")
+    results = list(train_run.starmap(cfgs))
+    for cfg, r in zip(cfgs, results):
+        print(f"  {cfg[1]}: ok={r.get('ok')}  rc={r.get('returncode')}  dur={r.get('duration_s')}s")
+
+
+@app.local_entrypoint()
+def sweep():
+    """Scope-C sweep: 3 models x {hyp, exp} x {s0, s1} = 12 runs in parallel.
+
+    Models:
+      - Qwen2.5-3B (Phase 1: weakest baseline ~0%, original target)
+      - Qwen3-4B    (Phase 2: mid baseline ~20%)
+      - gemma-4-E4B (Phase 2: strongest baseline 25-35%)
+    See scripts/dev/render_sweep_tomls.py for the rendering matrix.
+    """
+    cfgs = [
+        # Phase 1 — Qwen2.5-3B
+        ("rl/phase1_qwen25_3b_hyp_s0.toml", "qwen25-3b-hyp-s0"),
+        ("rl/phase1_qwen25_3b_hyp_s1.toml", "qwen25-3b-hyp-s1"),
+        ("rl/phase1_qwen25_3b_exp_s0.toml", "qwen25-3b-exp-s0"),
+        ("rl/phase1_qwen25_3b_exp_s1.toml", "qwen25-3b-exp-s1"),
+        # Phase 2a — Qwen3-4B
+        ("rl/phase2_qwen3_4b_hyp_s0.toml", "qwen3-4b-hyp-s0"),
+        ("rl/phase2_qwen3_4b_hyp_s1.toml", "qwen3-4b-hyp-s1"),
+        ("rl/phase2_qwen3_4b_exp_s0.toml", "qwen3-4b-exp-s0"),
+        ("rl/phase2_qwen3_4b_exp_s1.toml", "qwen3-4b-exp-s1"),
+        # Phase 2b — gemma-4-E4B
+        ("rl/phase2_gemma4_e4b_hyp_s0.toml", "gemma4-e4b-hyp-s0"),
+        ("rl/phase2_gemma4_e4b_hyp_s1.toml", "gemma4-e4b-hyp-s1"),
+        ("rl/phase2_gemma4_e4b_exp_s0.toml", "gemma4-e4b-exp-s0"),
+        ("rl/phase2_gemma4_e4b_exp_s1.toml", "gemma4-e4b-exp-s1"),
+    ]
+    print(f"Launching sweep: {len(cfgs)} runs in parallel")
     results = list(train_run.starmap(cfgs))
     for cfg, r in zip(cfgs, results):
         print(f"  {cfg[1]}: ok={r.get('ok')}  rc={r.get('returncode')}  dur={r.get('duration_s')}s")
