@@ -156,9 +156,31 @@ def phase1():
         ("rl/phase1_qwen25_3b_exp_s1.toml", "qwen25-3b-exp-s1"),
     ]
     print(f"Launching Phase 1: {len(cfgs)} runs in parallel")
-    results = list(train_run.starmap(cfgs))
-    for cfg, r in zip(cfgs, results):
-        print(f"  {cfg[1]}: ok={r.get('ok')}  rc={r.get('returncode')}  dur={r.get('duration_s')}s")
+    # Spawn-and-collect: one failure doesn't kill the rest (see sweep() for details).
+    calls = [(cfg, train_run.spawn(*cfg)) for cfg in cfgs]
+    results = []
+    for cfg, call in calls:
+        try:
+            r = call.get()
+        except Exception as e:
+            r = {"ok": False, "error": str(e)[:200]}
+        results.append(r)
+        print(f"  {cfg[1]}: ok={r.get('ok')}  rc={r.get('returncode')}  dur={r.get('duration_s')}s  err={r.get('error', '')}")
+
+
+@app.local_entrypoint()
+def single_qwen3_4b_hyp_s1():
+    """Backfill — relaunches just qwen3-4b-hyp-s1 to fill the missing seed in the
+    Qwen3-4B 2x2. The cell crashed during sweep_003 due to a stale evicted.txt
+    from sweep_002 (bash-timeout-killed). Stale file has since been cleaned."""
+    cfgs = [("rl/phase2_qwen3_4b_hyp_s1.toml", "qwen3-4b-hyp-s1")]
+    calls = [(cfg, train_run.spawn(*cfg)) for cfg in cfgs]
+    for cfg, call in calls:
+        try:
+            r = call.get()
+        except Exception as e:
+            r = {"ok": False, "error": str(e)[:200]}
+        print(f"  {cfg[1]}: ok={r.get('ok')}  rc={r.get('returncode')}  dur={r.get('duration_s')}s  err={r.get('error', '')}")
 
 
 @app.local_entrypoint()
@@ -189,6 +211,18 @@ def sweep():
         ("rl/phase2_gemma4_e4b_exp_s1.toml", "gemma4-e4b-exp-s1"),
     ]
     print(f"Launching sweep: {len(cfgs)} runs in parallel")
-    results = list(train_run.starmap(cfgs))
-    for cfg, r in zip(cfgs, results):
-        print(f"  {cfg[1]}: ok={r.get('ok')}  rc={r.get('returncode')}  dur={r.get('duration_s')}s")
+    # Spawn-and-collect pattern (vs starmap): one cell crashing/raising doesn't
+    # take down the rest. Modal's `starmap` raises RemoteError on any child
+    # failure, which kills the entire local entrypoint and stops the app —
+    # that's how we lost an entire sweep when one Qwen2.5-3B cell crashed at
+    # step 8. Here we collect results per-cell, catching exceptions so the
+    # other 11 cells keep training.
+    calls = [(cfg, train_run.spawn(*cfg)) for cfg in cfgs]
+    results = []
+    for cfg, call in calls:
+        try:
+            r = call.get()
+        except Exception as e:
+            r = {"ok": False, "error": str(e)[:200]}
+        results.append(r)
+        print(f"  {cfg[1]}: ok={r.get('ok')}  rc={r.get('returncode')}  dur={r.get('duration_s')}s  err={r.get('error', '')}")

@@ -62,6 +62,23 @@ batch_size = 64
 rollouts_per_example = 4   # GRPO group size — all G rollouts share target_s per problem
 seed = 0
 
+# Override the default filter list to disable enforcement of zero_advantage —
+# otherwise the orchestrator evicts the run after MAX_EMPTY_BATCH_ATTEMPTS=3
+# consecutive all-zero-advantage batches (hardcoded at orchestrator.py:447-452).
+# For sparse-reward low-baseline models (Qwen2.5-3B ~0% correctness), zero-advantage
+# batches are common in early training; eviction kills the run before learning starts.
+# enforce=false keeps the filter's detection metrics in wandb but lets the rollouts
+# pass through to the trainer (zero gradient on those batches, but no eviction).
+[[orchestrator.filters]]
+type = "gibberish"
+
+[[orchestrator.filters]]
+type = "repetition"
+
+[[orchestrator.filters]]
+type = "zero_advantage"
+enforce = false
+
 [orchestrator.train.sampling]
 max_completion_tokens = 256
 temperature = 1.0
