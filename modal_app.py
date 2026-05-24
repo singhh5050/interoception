@@ -184,6 +184,20 @@ def single_qwen3_4b_hyp_s1():
 
 
 @app.local_entrypoint()
+def v2():
+    """v2 minimal single-cell run (Kanishk's spec): Qwen3-4B, hyperbolic c*min(1,T/t),
+    no bonus, no 5T cutoff, 128 tok/chunk, T~U(15,130), G=8. See configs/rl/v2_qwen3_4b.toml."""
+    cfgs = [("rl/v2_qwen3_4b.toml", "v2-qwen3-4b-hyp")]
+    calls = [(cfg, train_run.spawn(*cfg)) for cfg in cfgs]
+    for cfg, call in calls:
+        try:
+            r = call.get()
+        except Exception as e:
+            r = {"ok": False, "error": str(e)[:200]}
+        print(f"  {cfg[1]}: ok={r.get('ok')}  rc={r.get('returncode')}  dur={r.get('duration_s')}s  err={r.get('error', '')}")
+
+
+@app.local_entrypoint()
 def sweep():
     """Scope-C sweep: 3 models x {hyp, exp} x {s0, s1} = 12 runs in parallel.
 

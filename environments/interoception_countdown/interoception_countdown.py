@@ -51,6 +51,10 @@ class InteroceptionConfig(BaseModel):
     # system prompt, poisoning the advantage signal.
     target_s_min: float = 15.0
     target_s_max: float = 120.0
+    # Budget sampling distribution. "uniform" samples T ~ U(min, max);
+    # "log" samples log-uniform. Kanishk's call: log-uniform biases the model
+    # too hard toward small budgets, so v2 uses uniform.
+    target_s_dist: Literal["uniform", "log"] = "uniform"
     # Seed for per-row target_s assignment. Two phase1 seeds (0, 1) get
     # different T-assignments across the dataset — the primary source of
     # cross-seed variance we want.
@@ -68,10 +72,12 @@ class InteroceptionConfig(BaseModel):
     # whether or not it satisfies the multiset/target constraints. Pulls the model
     # away from quitting toward attempts. Applied additively on every reward shape.
     attempt_bonus: float = 0.05
-    # Max-time multiplier. The env cuts off the rollout at `multiplier * target_s`,
-    # not at `target_s` itself — gives the new reward curves room to decay
-    # smoothly past T before the hard stop.
+    # Max-time multiplier. When enforce_max_time=True the env cuts off the rollout
+    # at `multiplier * target_s`. v2 sets enforce_max_time=False: no time-based
+    # cutoff at all (only max_turns / seq_len bound the rollout), and the
+    # hyperbolic reward becomes pure c·min(1, T/t) with no decay cap.
     max_time_multiplier: float = 5.0
+    enforce_max_time: bool = True
     # Asymmetric-shape-only weights (mirror rl_train.py defaults).
     alpha: float = 1.0       # speed bonus on correct
     beta_wrong: float = 0.1  # penalty when parseable but wrong
@@ -140,6 +146,7 @@ class CountdownTimeBudgetEnv(vf.MultiTurnEnv):
             "reward_shape": self.cfg.reward_shape,
             "reward_alpha": self.cfg.reward_alpha,
             "max_time_multiplier": self.cfg.max_time_multiplier,
+            "enforce_max_time": self.cfg.enforce_max_time,
             "attempt_bonus": self.cfg.attempt_bonus,
         }
 
@@ -215,25 +222,28 @@ class CountdownTimeBudgetEnv(vf.MultiTurnEnv):
             state["is_completed"] = True
             return []
 
-        # Hard cutoff at max_time = multiplier × target_s.
-        # New reward curves (hyperbolic/exponential) credit late-but-correct
-        # answers with decaying reward past target_s. We let the model keep
-        # going past target_s up to max_time, so it can still commit late.
-        # At max_time it's hard-stopped regardless.
-        max_time = self.cfg.max_time_multiplier * state["target_s"]
-        if state["elapsed_s"] >= max_time:
-            state["final_env_response"] = [
-                {"role": "user", "content": f"[hard cutoff at {state['elapsed_s']:.1f}s (max_time={max_time:.0f}s)]"}
-            ]
-            state["is_completed"] = True
-            return []
+        # Optional hard cutoff at max_time = multiplier × target_s. v2 disables
+        # this (enforce_max_time=False): rollouts end only via <answer> or
+        # max_turns/seq_len, never a T-dependent time wall. The T-dependent wall
+        # was a confound — at small T it forced eviction before the model could
+        # commit, which looked like "pacing" but was just truncation.
+        if self.cfg.enforce_max_time:
+            max_time = self.cfg.max_time_multiplier * state["target_s"]
+            if state["elapsed_s"] >= max_time:
+                state["final_env_response"] = [
+                    {"role": "user", "content": f"[hard cutoff at {state['elapsed_s']:.1f}s (max_time={max_time:.0f}s)]"}
+                ]
+                state["is_completed"] = True
+                return []
 
         return [{"role": "user", "content": f"[{state['elapsed_s']:.1f}s elapsed]"}]
 
     @vf.stop
     async def budget_exhausted(self, state: vf.State) -> bool:
-        # Safety net — env_response already short-circuits via final_env_response.
-        # Cutoff is at max_time (= multiplier × target_s), NOT target_s.
+        # Only fires when enforce_max_time=True. v2 disables the time wall, so
+        # this always returns False and rollouts end via <answer> or max_turns.
+        if not self.cfg.enforce_max_time:
+            return False
         max_time = self.cfg.max_time_multiplier * state.get("target_s", float("inf"))
         return state.get("elapsed_s", 0.0) >= max_time
 
@@ -258,7 +268,8 @@ def _bucket(state: vf.State, answer) -> str:
 
 # --- New reward shapes (hyperbolic / exponential) ---
 
-def _correctness_term(state: vf.State, answer, shape: str, alpha: float, max_time_multiplier: float) -> float:
+def _correctness_term(state: vf.State, answer, shape: str, alpha: float,
+                      max_time_multiplier: float, enforce_max_time: bool = True) -> float:
     """Reward for a correct answer, decayed by overshoot beyond target_s.
     Returns 0 if not correct."""
     if _bucket(state, answer) != "correct":
@@ -267,13 +278,14 @@ def _correctness_term(state: vf.State, answer, shape: str, alpha: float, max_tim
     T = state["target_s"]
     if t <= T:
         return 1.0
-    max_t = max_time_multiplier * T
-    capped_t = min(t, max_t)
+    # With no time-based cutoff (v2), the hyperbolic reward is pure c·min(1, T/t)
+    # — no decay cap, t bounded naturally by max_turns/seq_len.
+    capped_t = t if not enforce_max_time else min(t, max_time_multiplier * T)
     if shape == "hyperbolic":
-        # T/t at t=T is 1, at t=max_t=5T is 0.2, at t=2T is 0.5, etc.
+        # T/t at t=T is 1, at t=2T is 0.5, at t=4T is 0.25, ...
         return T / capped_t
     elif shape == "exponential":
-        # exp(-α(t-T)/T) at t=T is 1, at t=2T is exp(-α)≈0.37 (α=1), at t=5T is exp(-4α)≈0.018.
+        # exp(-α(t-T)/T) at t=T is 1, at t=2T is exp(-α)≈0.37 (α=1).
         return math.exp(-alpha * (capped_t - T) / T)
     else:
         raise ValueError(f"Unknown reward shape: {shape!r}")
@@ -291,6 +303,7 @@ def correctness_with_time(state, answer, **_) -> float:
         shape=cfg["reward_shape"],
         alpha=cfg["reward_alpha"],
         max_time_multiplier=cfg["max_time_multiplier"],
+        enforce_max_time=cfg.get("enforce_max_time", True),
     )
 
 
@@ -421,7 +434,10 @@ def _load_dataset(jsonl_path: str, cfg: InteroceptionConfig) -> Dataset:
                 continue
             r = json.loads(line)
             rng = random.Random(cfg.dataset_seed ^ (idx * 2654435761 & 0xFFFFFFFF))
-            target_s = math.exp(rng.uniform(log_lo, log_hi))
+            if cfg.target_s_dist == "log":
+                target_s = math.exp(rng.uniform(log_lo, log_hi))
+            else:  # uniform (v2 default)
+                target_s = rng.uniform(cfg.target_s_min, cfg.target_s_max)
             rows.append({
                 "prompt": [{"role": "user", "content": _build_prompt(r["nums"], r["target"])}],
                 "answer": {"nums": list(r["nums"]), "target": int(r["target"])},

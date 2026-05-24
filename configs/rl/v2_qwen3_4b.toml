@@ -1,0 +1,127 @@
+# v2 — minimal single-cell run per Kanishk's spec (2026-05-23 thread).
+# Question this run answers: with chunk granularity small enough that the budget
+# is expressible (128 tok/chunk ~= 10s, so even T=15 fits ~1.5 chunks), and no
+# hard time cutoff or format bonus confounding it — does commit time / correctness
+# respond to T?
+#
+# Changes from the sweep:
+#   - one model (Qwen3-4B), one reward shape (hyperbolic = c*min(1, T/t))
+#   - NO parseable bonus (attempt_bonus = 0)
+#   - NO 5T time cutoff (enforce_max_time = false) -> rollout ends on <answer> or max_turns
+#   - 128 tokens/chunk (was 256); seq_len 2048 total (was 8192)
+#   - T ~ Uniform(15, 130) (was log-uniform [15,120]); 130 = sim-compute ceiling at 2048 tokens
+#   - group size 8 (was 4)
+
+max_steps = 200
+seq_len = 2048
+output_dir = "/cache/runs/v2_qwen3_4b"
+
+[ckpt]
+
+[wandb]
+project = "interoception"
+name = "v2-qwen3-4b-hyp"
+
+[model]
+name = "Qwen/Qwen3-4B-Instruct-2507"
+
+[trainer.model.lora]
+rank = 32
+alpha = 32.0
+dropout = 0.0
+target_modules = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+
+[trainer.ckpt.weights]
+save_adapter_separately = true
+
+[trainer.optim]
+type = "adamw"
+lr = 5e-5
+max_norm = 1.0
+betas1 = 0.9
+betas2 = 0.999
+weight_decay = 0.01
+
+[trainer.loss]
+type = "default"
+kl_tau = 1e-3
+
+[trainer.scheduler]
+type = "linear"
+warmup_steps = 10
+decay_steps = 10
+min_lr = 0.0
+
+[orchestrator]
+batch_size = 64
+rollouts_per_example = 8   # G=8 GRPO group size
+seed = 0
+
+# zero_advantage filter not enforced — at sparse reward, many groups are
+# all-fail (zero advantage); enforcing eviction kills the run. Keep tracking, don't drop.
+[[orchestrator.filters]]
+type = "gibberish"
+[[orchestrator.filters]]
+type = "repetition"
+[[orchestrator.filters]]
+type = "zero_advantage"
+enforce = false
+
+[orchestrator.train.sampling]
+max_completion_tokens = 128
+temperature = 1.0
+
+[[orchestrator.train.env]]
+id = "interoception-countdown"
+name = "v2-qwen3-4b-train"
+args = { problems_jsonl = "/root/data/train.jsonl", target_s_min = 15.0, target_s_max = 130.0, target_s_dist = "uniform", dataset_seed = 0, timing_source = "sim", hardware = "A100_80GB", sim_model = "Qwen3-4B", max_turns = 16, reward_shape = "hyperbolic", attempt_bonus = 0.0, enforce_max_time = false }
+
+[orchestrator.eval]
+interval = 20
+
+[orchestrator.eval.sampling]
+max_completion_tokens = 128
+temperature = 0.0
+
+# Eval at 5 uniform budgets spanning the full U(15,130) training range.
+# 5 points (vs 9) keeps eval cost ~half while still resolving the curve shape;
+# n=100 each for full precision. Real correctness from saved rollouts (is_correct);
+# Avg@1 here is the hyperbolic reward.
+
+[[orchestrator.eval.env]]
+id = "interoception-countdown"
+name = "eval-t15"
+num_examples = 100
+rollouts_per_example = 1
+args = { problems_jsonl = "/root/data/eval.jsonl", target_s_min = 15.0, target_s_max = 15.0, max_turns = 16, reward_shape = "hyperbolic", attempt_bonus = 0.0, enforce_max_time = false }
+
+[[orchestrator.eval.env]]
+id = "interoception-countdown"
+name = "eval-t45"
+num_examples = 100
+rollouts_per_example = 1
+args = { problems_jsonl = "/root/data/eval.jsonl", target_s_min = 45.0, target_s_max = 45.0, max_turns = 16, reward_shape = "hyperbolic", attempt_bonus = 0.0, enforce_max_time = false }
+
+[[orchestrator.eval.env]]
+id = "interoception-countdown"
+name = "eval-t75"
+num_examples = 100
+rollouts_per_example = 1
+args = { problems_jsonl = "/root/data/eval.jsonl", target_s_min = 75.0, target_s_max = 75.0, max_turns = 16, reward_shape = "hyperbolic", attempt_bonus = 0.0, enforce_max_time = false }
+
+[[orchestrator.eval.env]]
+id = "interoception-countdown"
+name = "eval-t105"
+num_examples = 100
+rollouts_per_example = 1
+args = { problems_jsonl = "/root/data/eval.jsonl", target_s_min = 105.0, target_s_max = 105.0, max_turns = 16, reward_shape = "hyperbolic", attempt_bonus = 0.0, enforce_max_time = false }
+
+[[orchestrator.eval.env]]
+id = "interoception-countdown"
+name = "eval-t130"
+num_examples = 100
+rollouts_per_example = 1
+args = { problems_jsonl = "/root/data/eval.jsonl", target_s_min = 130.0, target_s_max = 130.0, max_turns = 16, reward_shape = "hyperbolic", attempt_bonus = 0.0, enforce_max_time = false }
+
+[inference]
+enable_fp32_lm_head = true
