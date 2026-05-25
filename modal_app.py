@@ -97,8 +97,12 @@ app = modal.App(APP_NAME)
     secrets=[wandb_secret],
     timeout=6 * 3600,
 )
-def train_run(toml_name: str, run_name: str, wandb_project: str = "interoception") -> dict:
-    """Run a prime-rl training job. prime-rl orchestrates vllm + trainer internally."""
+def train_run(toml_name: str, run_name: str, wandb_project: str = "interoception",
+              extra_args: list[str] | None = None) -> dict:
+    """Run a prime-rl training job. prime-rl orchestrates vllm + trainer internally.
+
+    extra_args: optional CLI overrides appended to `rl @ <toml>` (e.g. for smokes:
+    ['--max-steps', '4', '--ckpt.interval', '2', '--output-dir', '/cache/runs/x_smoke'])."""
     import os
     import subprocess
     import time
@@ -116,6 +120,7 @@ def train_run(toml_name: str, run_name: str, wandb_project: str = "interoception
         "@", cfg_path,
         "--wandb.project", wandb_project,
         "--wandb.name", run_name,
+        *(extra_args or []),
     ]
     print(f"[prime-rl] launching: {' '.join(cmd)}", flush=True)
     t0 = time.time()
@@ -188,6 +193,54 @@ def v2():
     """v2 minimal single-cell run (Kanishk's spec): Qwen3-4B, hyperbolic c*min(1,T/t),
     no bonus, no 5T cutoff, 128 tok/chunk, T~U(15,130), G=8. See configs/rl/v2_qwen3_4b.toml."""
     cfgs = [("rl/v2_qwen3_4b.toml", "v2-qwen3-4b-hyp")]
+    calls = [(cfg, train_run.spawn(*cfg)) for cfg in cfgs]
+    for cfg, call in calls:
+        try:
+            r = call.get()
+        except Exception as e:
+            r = {"ok": False, "error": str(e)[:200]}
+        print(f"  {cfg[1]}: ok={r.get('ok')}  rc={r.get('returncode')}  dur={r.get('duration_s')}s  err={r.get('error', '')}")
+
+
+@app.local_entrypoint()
+def controls_smoke():
+    """Short smoke of the REAL ctrlA/ctrlB configs (4 steps, ckpt every 2) to validate
+    config validation + the new env flags + B's single-turn path BEFORE the full run.
+    Writes to *_smoke output dirs and *-smoke wandb names so it doesn't touch the real
+    runs. Verify after: returncode 0, weights/step_{2,4} written w/ adapter, B commits
+    (not all timeout), f_term logged."""
+    # warmup/decay overridden so the schedule fits 4 steps (decay_steps>=2 avoids the
+    # known LinearLR ZeroDivisionError at decay_steps=1).
+    common = ["--max-steps", "4", "--ckpt.interval", "2",
+              "--trainer.scheduler.warmup-steps", "1", "--trainer.scheduler.decay-steps", "2"]
+    jobs = [
+        ("rl/ctrlA_qwen3_4b.toml", "ctrlA-smoke", common + ["--output-dir", "/cache/runs/ctrlA_smoke"]),
+        ("rl/ctrlB_qwen3_4b.toml", "ctrlB-smoke", common + ["--output-dir", "/cache/runs/ctrlB_smoke"]),
+    ]
+    print(f"Launching control smokes: {len(jobs)} runs (4 steps each)")
+    calls = [(j, train_run.spawn(j[0], j[1], extra_args=j[2])) for j in jobs]
+    for (toml, name, _), call in calls:
+        try:
+            r = call.get()
+        except Exception as e:
+            r = {"ok": False, "error": str(e)[:200]}
+        print(f"  {name}: ok={r.get('ok')}  rc={r.get('returncode')}  dur={r.get('duration_s')}s  err={r.get('error', '')}")
+
+
+@app.local_entrypoint()
+def controls():
+    """Clean 3-way for the f(t,T) ablation (Kanishk's 2026-05-24 thread). All Qwen3-4B,
+    identical fixed env + eval (uniform T, temp 1.0, seed 777), checkpoint every 50.
+      0 (ctrl0): TREATMENT — reward c*f(t,T), multi-turn, [Xs elapsed] injected.
+      A (ctrlA): no time reward (c only), multi-turn, [Xs elapsed] still injected.
+      B (ctrlB): no time signal — c only, single turn (max_turns=1), no injection.
+    Treatment is re-run (not re-eval of old v2) so all three share fixed training code."""
+    cfgs = [
+        ("rl/ctrl0_qwen3_4b.toml", "ctrl0-qwen3-4b-treatment"),
+        ("rl/ctrlA_qwen3_4b.toml", "ctrlA-qwen3-4b-noTimeReward"),
+        ("rl/ctrlB_qwen3_4b.toml", "ctrlB-qwen3-4b-noTimeSignal"),
+    ]
+    print(f"Launching controls: {len(cfgs)} runs in parallel")
     calls = [(cfg, train_run.spawn(*cfg)) for cfg in cfgs]
     for cfg, call in calls:
         try:
