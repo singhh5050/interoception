@@ -68,10 +68,23 @@ class InteroceptionConfig(BaseModel):
     reward_shape: Literal["hyperbolic", "exponential", "asymmetric"] = "hyperbolic"
     # Exponential decay coefficient (only used when reward_shape="exponential").
     reward_alpha: float = 1.0
+    # Control flags for the f(t,T) ablations (Kanishk's 2026-05-24 controls thread):
+    #   reward_time_term=False -> f(t,T)=1 always, so the reward collapses to pure
+    #     correctness c (no timing term). Used by control A (no time reward) and
+    #     control B. The f_term diagnostic is still logged so we can SEE whether the
+    #     model paces even without being rewarded for it.
+    #   inject_elapsed=False -> the env never injects "[X seconds elapsed]" and the
+    #     system prompt omits the injection mechanism (still states the budget). Used
+    #     by control B together with max_turns=1 (single-turn, no time signal at all).
+    reward_time_term: bool = True
+    inject_elapsed: bool = True
     # Attempt bonus: reward for emitting *any* parseable arithmetic expression,
-    # whether or not it satisfies the multiset/target constraints. Pulls the model
-    # away from quitting toward attempts. Applied additively on every reward shape.
-    attempt_bonus: float = 0.05
+    # whether or not it satisfies the multiset/target constraints.
+    # LEGACY / OFF BY DEFAULT: this is the v1 confound that reward-hacked Qwen2.5-3B
+    # (the policy maximized "emit any arithmetic" and ignored correctness). Kanishk
+    # dropped it. Default 0.0 so a config that omits it can't silently reintroduce
+    # the confound; set explicitly (>0) only for legacy sweeps.
+    attempt_bonus: float = 0.0
     # Max-time multiplier. When enforce_max_time=True the env cuts off the rollout
     # at `multiplier * target_s`. v2 sets enforce_max_time=False: no time-based
     # cutoff at all (only max_turns / seq_len bound the rollout), and the
@@ -104,14 +117,23 @@ def _build_prompt(nums: list[int], target: int) -> str:
     )
 
 
-def _build_system_prompt(target_s: float) -> str:
-    return (
+def _build_system_prompt(target_s: float, inject_elapsed: bool = True) -> str:
+    base = (
         "You are solving a problem under a wallclock time budget.\n"
         f"Your budget is {target_s:.0f} seconds.\n"
-        'Between your turns the user will inject messages of the form "[X seconds elapsed]" '
-        "telling you how much wallclock time has passed.\n"
-        "You should pace yourself: think when there is time, commit to an answer when "
-        "time runs short. When you are ready, output your final answer inside "
+    )
+    if inject_elapsed:
+        return base + (
+            'Between your turns the user will inject messages of the form "[X seconds elapsed]" '
+            "telling you how much wallclock time has passed.\n"
+            "You should pace yourself: think when there is time, commit to an answer when "
+            "time runs short. When you are ready, output your final answer inside "
+            "<answer>...</answer> tags. Anything after </answer> is ignored."
+        )
+    # Control B: no elapsed signal. State the budget, but don't describe an
+    # injection mechanism that won't fire (single-turn, no [Xs elapsed]).
+    return base + (
+        "Work within this budget. When you are ready, output your final answer inside "
         "<answer>...</answer> tags. Anything after </answer> is ignored."
     )
 
@@ -148,13 +170,19 @@ class CountdownTimeBudgetEnv(vf.MultiTurnEnv):
             "max_time_multiplier": self.cfg.max_time_multiplier,
             "enforce_max_time": self.cfg.enforce_max_time,
             "attempt_bonus": self.cfg.attempt_bonus,
+            "reward_time_term": self.cfg.reward_time_term,
+            # Needed so the reward-time elapsed finalizer (_finalize_elapsed) can
+            # recompute sim latency over the FULL trajectory, incl. the final turn.
+            "timing_source": self.cfg.timing_source,
+            "hardware": self.cfg.hardware,
+            "sim_model": self.cfg.sim_model,
         }
 
         # Inject the budget-aware system prompt into the prompt list if not already there.
         prompt = state.get("prompt") or []
         if not prompt or prompt[0].get("role") != "system":
             state["prompt"] = [
-                {"role": "system", "content": _build_system_prompt(state["target_s"])},
+                {"role": "system", "content": _build_system_prompt(state["target_s"], self.cfg.inject_elapsed)},
                 *prompt,
             ]
         return state
@@ -185,9 +213,7 @@ class CountdownTimeBudgetEnv(vf.MultiTurnEnv):
             # count comes from response.usage (step["tokens"] is None for the OpenAI
             # chat-completions client). prev_ctx_tokens is summed from past prompt sizes.
             from hwprop.simulator import simulate_latency  # lazy: only import if used
-            usage = getattr(last.get("response"), "usage", None)
-            chunk_tokens = int(getattr(usage, "completion_tokens", 0)) if usage else 0
-            prev_ctx_tokens = int(getattr(usage, "prompt_tokens", 0)) if usage else 0
+            prev_ctx_tokens, chunk_tokens = _step_usage(last)
             if chunk_tokens > 0:
                 r = simulate_latency(
                     self.cfg.hardware, self.cfg.sim_model,
@@ -236,6 +262,12 @@ class CountdownTimeBudgetEnv(vf.MultiTurnEnv):
                 state["is_completed"] = True
                 return []
 
+        # Control B: no time signal. elapsed_s is still tracked above for the
+        # f_term / elapsed_over_target diagnostics, but the model never sees it.
+        # (Paired with max_turns=1, the rollout is single-turn anyway.)
+        if not self.cfg.inject_elapsed:
+            return []
+
         return [{"role": "user", "content": f"[{state['elapsed_s']:.1f}s elapsed]"}]
 
     @vf.stop
@@ -253,33 +285,117 @@ class CountdownTimeBudgetEnv(vf.MultiTurnEnv):
 # `correct_with_speed_bonus` + 4 bucket penalties are the original asymmetric shape (kept for fallback).
 # `is_correct/wrong/quit/timeout/parseable` are 0/1 diagnostic metrics (weight=0 in rubric).
 
+def _last_assistant_text(state: vf.State) -> str:
+    """Text of the model's final turn, read straight from the trajectory.
+
+    `env_response` (which captures the committed answer live) fires *between*
+    turns, so it never runs after the last/only turn — single-turn rollouts
+    (max_turns=1) and multi-turn rollouts that commit on the final allowed turn
+    would otherwise be scored as timeouts. Reading the trajectory at reward time
+    makes scoring independent of that hook."""
+    traj = state.get("trajectory") or []
+    if not traj:
+        return ""
+    completion = traj[-1].get("completion") or []
+    if not completion:
+        return ""
+    return completion[-1].get("content", "") or ""
+
+
+def _committed_answer(state: vf.State) -> str | None:
+    """The answer the model committed, for scoring. Prefers the value captured
+    live in env_response (multi-turn mid-rollout commit); falls back to scanning
+    the final assistant turn so single-turn / last-turn commits aren't mis-scored
+    as timeouts."""
+    if state.get("parsed_answer") is not None:
+        return state["parsed_answer"]
+    text = _last_assistant_text(state)
+    if not text:
+        return None
+    m = ANSWER_RE.search(text)
+    if m:
+        return m.group(1).strip()
+    if "<answer>" in text:  # opened but cut off before </answer>
+        return text.split("<answer>", 1)[1].strip()
+    return None
+
+
+def _step_usage(step) -> tuple[int, int]:
+    """(prompt_tokens, completion_tokens) for one trajectory step.
+
+    The OpenAI chat-completions client leaves step['tokens'] as None, so the live
+    token counts come from the response usage object; fall back to token_usage /
+    tokens dicts for other client shapes."""
+    usage = getattr(step.get("response"), "usage", None)
+    if usage is not None and getattr(usage, "completion_tokens", None) is not None:
+        return int(getattr(usage, "prompt_tokens", 0) or 0), int(usage.completion_tokens)
+    tu = step.get("token_usage")
+    if isinstance(tu, dict) and tu.get("output_tokens") is not None:
+        return int(tu.get("input_tokens") or 0), int(tu["output_tokens"])
+    tok = step.get("tokens")
+    if tok is not None:
+        out = getattr(tok, "output_tokens", None)
+        inp = getattr(tok, "input_tokens", None)
+        if out is None and isinstance(tok, dict):
+            out, inp = tok.get("output_tokens"), tok.get("input_tokens")
+        if out is not None:
+            return int(inp or 0), int(out)
+    return 0, 0
+
+
+def _finalize_elapsed(state: vf.State) -> float:
+    """Total elapsed wallclock across ALL turns, computed at scoring time from the
+    trajectory. env_response only advances elapsed_s *between* turns, so it never
+    accounts for the final/only turn (single-turn rollouts, or multi-turn commits on
+    the last allowed turn) — leaving the reward-time time term and the
+    f_term/elapsed_over_target diagnostics stale. Recomputing here closes that gap,
+    mirroring env_response's per-turn cost exactly (prefill on turn 0 only)."""
+    cfg = state.get("_cfg") or {}
+    if cfg.get("timing_source", "real") == "real":
+        timing = state.get("timing")
+        spans = timing.model.spans if timing is not None else []
+        return float(sum(s.end - s.start for s in spans))
+    from hwprop.simulator import simulate_latency
+    total = 0.0
+    for i, step in enumerate(state.get("trajectory") or []):
+        pt, ct = _step_usage(step)
+        if ct > 0:
+            r = simulate_latency(cfg.get("hardware", "A100_80GB"), cfg.get("sim_model", "Qwen3-4B"),
+                                 prompt_len=max(pt, 1), decode_steps=ct)
+            total += (r.prefill_time_s if i == 0 else 0.0) + r.total_decode_time_s
+    return total
+
+
+def _elapsed(state: vf.State) -> float:
+    """Finalized elapsed, computed once per rollout and cached on state."""
+    if "_elapsed_final" not in state:
+        state["_elapsed_final"] = _finalize_elapsed(state)
+    return state["_elapsed_final"]
+
+
 def _bucket(state: vf.State, answer) -> str:
     """Classify the rollout outcome. answer is the dataset row's answer dict."""
-    if not state.get("answer_emitted"):
-        return "timeout"
-    parsed = state.get("parsed_answer")
+    parsed = _committed_answer(state)
+    if parsed is None:
+        return "timeout"  # never emitted <answer> anywhere
     ok = validate_solution(parsed, answer["nums"], answer["target"])
     if ok is True:
         return "correct"
     if ok is False:
         return "wrong"
-    return "quit"  # parsed is None / unparseable
+    return "quit"  # parsed present but unparseable
 
 
 # --- New reward shapes (hyperbolic / exponential) ---
 
-def _correctness_term(state: vf.State, answer, shape: str, alpha: float,
-                      max_time_multiplier: float, enforce_max_time: bool = True) -> float:
-    """Reward for a correct answer, decayed by overshoot beyond target_s.
-    Returns 0 if not correct."""
-    if _bucket(state, answer) != "correct":
-        return 0.0
-    t = state["elapsed_s"]
-    T = state["target_s"]
+def _time_factor(t: float, T: float, shape: str, alpha: float,
+                 max_time_multiplier: float, enforce_max_time: bool = True) -> float:
+    """Pure time term f(t,T), independent of correctness: 1.0 in budget, decayed past T.
+
+    With no time-based cutoff (v2/controls), the hyperbolic factor is pure
+    min(1, T/t) — no decay cap, t bounded naturally by max_turns/seq_len."""
     if t <= T:
         return 1.0
-    # With no time-based cutoff (v2), the hyperbolic reward is pure c·min(1, T/t)
-    # — no decay cap, t bounded naturally by max_turns/seq_len.
     capped_t = t if not enforce_max_time else min(t, max_time_multiplier * T)
     if shape == "hyperbolic":
         # T/t at t=T is 1, at t=2T is 0.5, at t=4T is 0.25, ...
@@ -289,6 +405,20 @@ def _correctness_term(state: vf.State, answer, shape: str, alpha: float,
         return math.exp(-alpha * (capped_t - T) / T)
     else:
         raise ValueError(f"Unknown reward shape: {shape!r}")
+
+
+def _correctness_term(state: vf.State, answer, shape: str, alpha: float,
+                      max_time_multiplier: float, enforce_max_time: bool = True,
+                      reward_time_term: bool = True) -> float:
+    """Reward for a correct answer, decayed by overshoot beyond target_s.
+    Returns 0 if not correct. With reward_time_term=False (controls A/B) the
+    time term is dropped entirely: a correct answer is worth 1.0 regardless of t."""
+    if _bucket(state, answer) != "correct":
+        return 0.0
+    if not reward_time_term:
+        return 1.0  # f(t,T) ≡ 1: pure correctness reward
+    return _time_factor(_elapsed(state), state["target_s"], shape, alpha,
+                        max_time_multiplier, enforce_max_time)
 
 
 @vf.reward
@@ -304,6 +434,7 @@ def correctness_with_time(state, answer, **_) -> float:
         alpha=cfg["reward_alpha"],
         max_time_multiplier=cfg["max_time_multiplier"],
         enforce_max_time=cfg.get("enforce_max_time", True),
+        reward_time_term=cfg.get("reward_time_term", True),
     )
 
 
@@ -314,7 +445,7 @@ def parseable_bonus(state, answer, **_) -> float:
 
     Note: we use raw 1.0 here; the 0.05 weight is applied at the Rubric level
     via cfg.attempt_bonus."""
-    return 1.0 if is_parseable_arithmetic(state.get("parsed_answer")) else 0.0
+    return 1.0 if is_parseable_arithmetic(_committed_answer(state)) else 0.0
 
 
 # --- Original asymmetric reward (kept for reward_shape="asymmetric") ---
@@ -328,7 +459,7 @@ def correct_with_speed_bonus(state, answer, **_) -> float:
         return 0.0
     if _bucket(state, answer) != "correct":
         return 0.0
-    speed = max(0.0, (state["target_s"] - state["elapsed_s"]) / state["target_s"])
+    speed = max(0.0, (state["target_s"] - _elapsed(state)) / state["target_s"])
     return 1.0 + speed
 
 
@@ -380,7 +511,7 @@ def is_timeout(state, answer, **_) -> float:
 
 @vf.reward
 def is_parseable(state, answer, **_) -> float:
-    return 1.0 if is_parseable_arithmetic(state.get("parsed_answer")) else 0.0
+    return 1.0 if is_parseable_arithmetic(_committed_answer(state)) else 0.0
 
 
 @vf.reward
@@ -389,7 +520,26 @@ def elapsed_over_target(state, answer, **_) -> float:
     T = state.get("target_s")
     if not T:
         return 0.0
-    return state["elapsed_s"] / T
+    return _elapsed(state) / T
+
+
+@vf.reward
+def f_term(state, answer, **_) -> float:
+    """The pure time term f(t,T)=min(1,T/t) (hyperbolic) over ALL rollouts, logged
+    natively at weight=0. The c·f reward folds correctness and timing together;
+    this exposes the timing half on its own so the split is visible on wandb without
+    backing it out by division (Kanishk 2026-05-24). For controls A/B (reward_time_term
+    off) this is the key control metric: does the model still land in-budget even
+    when timing isn't rewarded?"""
+    cfg = state.get("_cfg") or {}
+    T = state.get("target_s")
+    t = _elapsed(state)
+    if not T or t is None:
+        return 1.0
+    return _time_factor(t, T, cfg.get("reward_shape", "hyperbolic"),
+                        cfg.get("reward_alpha", 1.0),
+                        cfg.get("max_time_multiplier", 5.0),
+                        cfg.get("enforce_max_time", True))
 
 
 @vf.reward
@@ -400,18 +550,10 @@ def mean_n_turns(state, **_) -> float:
 
 @vf.reward
 def mean_completion_tokens(state, **_) -> float:
-    """Sum of output tokens across all turns. Weight=0 diagnostic for cost / verbosity."""
-    total = 0
-    for step in state.get("trajectory", []):
-        tokens = step.get("tokens")
-        if tokens is None:
-            continue
-        out = getattr(tokens, "output_tokens", None)
-        if out is None and isinstance(tokens, dict):
-            out = tokens.get("output_tokens")
-        if out is not None:
-            total += int(out)
-    return float(total)
+    """Sum of output tokens across all turns. Weight=0 diagnostic for cost / verbosity.
+    Reads via _step_usage (response.usage) — step['tokens'] is None for the OpenAI
+    chat-completions client, which previously made this read a constant 0."""
+    return float(sum(_step_usage(step)[1] for step in state.get("trajectory", [])))
 
 
 def _load_dataset(jsonl_path: str, cfg: InteroceptionConfig) -> Dataset:
@@ -485,6 +627,7 @@ def load_environment(**kwargs) -> vf.Environment:
         (is_timeout, 0.0),
         (is_parseable, 0.0),
         (elapsed_over_target, 0.0),
+        (f_term, 0.0),
         (mean_n_turns, 0.0),
         (mean_completion_tokens, 0.0),
     ]
