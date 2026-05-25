@@ -26,6 +26,22 @@ from typing import Iterable, Sequence
 # poisoning the reward signal on correct answers.
 _TRAILING_EQUALS_RE = re.compile(r"\s*=\s*[-+\d./*\s()]+\s*$")
 
+# Models routinely format the final expression with Unicode math operators
+# (×, ÷, −) and Unicode whitespace, e.g. "29 × (10 − 8) + 21". `ast.parse` only
+# understands ASCII */-, so without this a CORRECT answer is bucketed as quit and
+# scores 0 — silently undercounting correctness (single-turn answers especially,
+# which are almost all Unicode). Normalize to ASCII before parsing.
+_OPERATOR_NORMALIZE = str.maketrans({
+    "×": "*", "∗": "*", "⋅": "*", "·": "*",   # multiplication variants
+    "÷": "/", "∕": "/", "⁄": "/",              # division variants
+    "−": "-", "–": "-", "—": "-",              # minus / en-dash / em-dash
+    " ": " ", " ": " ", " ": " ",  # nbsp / narrow / thin spaces
+})
+
+
+def _normalize_operators(expr: str) -> str:
+    return expr.translate(_OPERATOR_NORMALIZE)
+
 OPS: tuple[tuple[str, callable], ...] = (
     ("+", lambda a, b: a + b),
     ("-", lambda a, b: a - b),
@@ -34,6 +50,13 @@ OPS: tuple[tuple[str, callable], ...] = (
 )
 
 _TOL = 1e-9
+
+# Tolerance for the FINAL expr==target check in validate_solution. Matches the
+# TinyZero/SoS convention (1e-5) so our acceptance is a relaxation of theirs on
+# every axis (charset looser via _normalize_operators, multiset identical,
+# tolerance equal) — i.e. we accept a provable superset of what the canonical
+# countdown scorer accepts. _TOL (1e-9) stays tight for the difficulty enumerator.
+_TARGET_TOL = 1e-5
 
 
 @dataclass(frozen=True)
@@ -105,6 +128,7 @@ def validate_solution(expr_str: str | None, nums: Sequence[int], target: int) ->
     if expr_str is None:
         return None
     expr = expr_str.strip().strip("`").strip()
+    expr = _normalize_operators(expr)
     expr = _TRAILING_EQUALS_RE.sub("", expr)
     if not expr:
         return None
@@ -134,7 +158,7 @@ def validate_solution(expr_str: str | None, nums: Sequence[int], target: int) ->
         return None
     if not isinstance(value, (int, float)):
         return None
-    return abs(value - float(target)) < _TOL
+    return abs(value - float(target)) < _TARGET_TOL
 
 
 def is_parseable_arithmetic(expr_str: str | None) -> bool:
@@ -148,6 +172,7 @@ def is_parseable_arithmetic(expr_str: str | None) -> bool:
     if expr_str is None:
         return False
     expr = expr_str.strip().strip("`").strip()
+    expr = _normalize_operators(expr)
     expr = _TRAILING_EQUALS_RE.sub("", expr)
     if not expr:
         return False
