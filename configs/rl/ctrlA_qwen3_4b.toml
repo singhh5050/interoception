@@ -1,0 +1,99 @@
+# Control A — "no time reward" ablation (Kanishk's 2026-05-24 controls thread).
+#
+# Identical to v2 / condition 0 EXCEPT the reward drops the f(t,T) term:
+#   reward = c only  (reward_time_term=false -> f(t,T)=1 always)
+# Still multi-turn with [Xs elapsed] injected — "just the reward changes."
+#
+# Isolates: does REWARDING timeliness change behavior, vs the model merely SEEING
+# elapsed time? (treatment vs A.) The f_term diagnostic is still logged at weight 0
+# so we can see whether the model paces even without being rewarded for it.
+#
+# Checkpointing: full weights (merged + adapter) every 50 steps -> 50/100/150/200.
+# prime-rl b22e768 cannot save adapter-only; each ckpt also writes a 17GB fp32
+# resume checkpoint. ~100GB/run; we re-eval these checkpoints later.
+
+max_steps = 200
+seq_len = 2048
+output_dir = "/cache/runs/ctrlA_qwen3_4b"
+
+[ckpt]
+interval = 50
+
+[wandb]
+project = "interoception"
+name = "ctrlA-qwen3-4b-noTimeReward"
+
+[model]
+name = "Qwen/Qwen3-4B-Instruct-2507"
+
+[trainer.model.lora]
+rank = 32
+alpha = 32.0
+dropout = 0.0
+target_modules = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+
+[trainer.ckpt.weights]
+save_adapter_separately = true
+
+[trainer.optim]
+type = "adamw"
+lr = 5e-5
+max_norm = 1.0
+betas1 = 0.9
+betas2 = 0.999
+weight_decay = 0.01
+
+[trainer.loss]
+type = "default"
+kl_tau = 1e-3
+
+[trainer.scheduler]
+type = "linear"
+warmup_steps = 10
+decay_steps = 10
+min_lr = 0.0
+
+[orchestrator]
+batch_size = 64
+rollouts_per_example = 8   # G=8 GRPO group size
+seed = 0
+
+# zero_advantage filter not enforced — at sparse reward many groups are all-fail
+# (zero advantage); enforcing eviction kills the run. Keep tracking, don't drop.
+[[orchestrator.filters]]
+type = "gibberish"
+[[orchestrator.filters]]
+type = "repetition"
+[[orchestrator.filters]]
+type = "zero_advantage"
+enforce = false
+
+[orchestrator.train.sampling]
+max_completion_tokens = 128
+temperature = 1.0
+
+[[orchestrator.train.env]]
+id = "interoception-countdown"
+name = "ctrlA-qwen3-4b-train"
+args = { problems_jsonl = "/root/data/train.jsonl", target_s_min = 15.0, target_s_max = 130.0, target_s_dist = "uniform", dataset_seed = 0, timing_source = "sim", hardware = "A100_80GB", sim_model = "Qwen3-4B", max_turns = 16, reward_shape = "hyperbolic", attempt_bonus = 0.0, enforce_max_time = false, reward_time_term = false }
+
+[orchestrator.eval]
+interval = 50
+
+[orchestrator.eval.sampling]
+max_completion_tokens = 128
+temperature = 1.0   # Kanishk: reasoning models don't work at temp 0; match training.
+
+# Eval: uniform T ~ U(15,130), temp 1.0, ~500 rollouts (all 498 held-out problems,
+# 1 rollout each). No fixed grid — base-vs-final via binning T or fitting is_correct~T.
+# Fixed eval dataset_seed=777 so ALL conditions + the v2 re-eval see the SAME
+# (problem, T) pairs -> paired comparison across conditions.
+[[orchestrator.eval.env]]
+id = "interoception-countdown"
+name = "ctrlA-eval-uniform"
+num_examples = 498
+rollouts_per_example = 1
+args = { problems_jsonl = "/root/data/eval.jsonl", target_s_min = 15.0, target_s_max = 130.0, target_s_dist = "uniform", dataset_seed = 777, timing_source = "sim", hardware = "A100_80GB", sim_model = "Qwen3-4B", max_turns = 16, reward_shape = "hyperbolic", attempt_bonus = 0.0, enforce_max_time = false, reward_time_term = false }
+
+[inference]
+enable_fp32_lm_head = true

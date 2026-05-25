@@ -1,0 +1,100 @@
+# Control B — "no time signal" ablation (Kanishk's 2026-05-24 controls thread).
+#
+# reward = c only (reward_time_term=false), AND the model never sees elapsed time:
+#   inject_elapsed=false  -> no "[Xs elapsed]" messages; system prompt omits the
+#                            injection mechanism but STILL states the budget.
+#   max_turns=1           -> single turn; the model gets one ~1800-token generation.
+#
+# Isolates: does merely SEEING elapsed time matter at all? (A vs B.) B's only
+# budget-related input is the target time stated in the system prompt.
+#
+# "single turn with 2048 tokens (give target time)" per Kanishk. DECISION: the
+# matched unit is TOTAL sequence length (= 2048, Kanishk's "2048 for everything"),
+# NOT the assistant completion budget. seq_len=2048 caps prompt+completion, so the
+# single generation is capped at max_completion_tokens=1792 (~256 reserved for the
+# prompt). Comparable total budget to A's 16x128=2048 multi-turn. If we instead want
+# a literal 2048-token completion, bump seq_len to ~2304 and max_completion_tokens to 2048.
+#
+# Checkpointing: full weights every 50 steps (50/100/150/200), ~100GB/run.
+
+max_steps = 200
+seq_len = 2048
+output_dir = "/cache/runs/ctrlB_qwen3_4b"
+
+[ckpt]
+interval = 50
+
+[wandb]
+project = "interoception"
+name = "ctrlB-qwen3-4b-noTimeSignal"
+
+[model]
+name = "Qwen/Qwen3-4B-Instruct-2507"
+
+[trainer.model.lora]
+rank = 32
+alpha = 32.0
+dropout = 0.0
+target_modules = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+
+[trainer.ckpt.weights]
+save_adapter_separately = true
+
+[trainer.optim]
+type = "adamw"
+lr = 5e-5
+max_norm = 1.0
+betas1 = 0.9
+betas2 = 0.999
+weight_decay = 0.01
+
+[trainer.loss]
+type = "default"
+kl_tau = 1e-3
+
+[trainer.scheduler]
+type = "linear"
+warmup_steps = 10
+decay_steps = 10
+min_lr = 0.0
+
+[orchestrator]
+batch_size = 64
+rollouts_per_example = 8   # G=8 GRPO group size
+seed = 0
+
+[[orchestrator.filters]]
+type = "gibberish"
+[[orchestrator.filters]]
+type = "repetition"
+[[orchestrator.filters]]
+type = "zero_advantage"
+enforce = false
+
+[orchestrator.train.sampling]
+max_completion_tokens = 1792   # single turn fills the budget (seq_len 2048 - prompt)
+temperature = 1.0
+
+[[orchestrator.train.env]]
+id = "interoception-countdown"
+name = "ctrlB-qwen3-4b-train"
+args = { problems_jsonl = "/root/data/train.jsonl", target_s_min = 15.0, target_s_max = 130.0, target_s_dist = "uniform", dataset_seed = 0, timing_source = "sim", hardware = "A100_80GB", sim_model = "Qwen3-4B", max_turns = 1, reward_shape = "hyperbolic", attempt_bonus = 0.0, enforce_max_time = false, reward_time_term = false, inject_elapsed = false }
+
+[orchestrator.eval]
+interval = 50
+
+[orchestrator.eval.sampling]
+max_completion_tokens = 1792
+temperature = 1.0
+
+# Eval mirrors B's training regime (single turn, no elapsed signal). Same eval
+# dataset_seed=777 as A and the v2 re-eval -> identical (problem, T) pairs.
+[[orchestrator.eval.env]]
+id = "interoception-countdown"
+name = "ctrlB-eval-uniform"
+num_examples = 498
+rollouts_per_example = 1
+args = { problems_jsonl = "/root/data/eval.jsonl", target_s_min = 15.0, target_s_max = 130.0, target_s_dist = "uniform", dataset_seed = 777, timing_source = "sim", hardware = "A100_80GB", sim_model = "Qwen3-4B", max_turns = 1, reward_shape = "hyperbolic", attempt_bonus = 0.0, enforce_max_time = false, reward_time_term = false, inject_elapsed = false }
+
+[inference]
+enable_fp32_lm_head = true

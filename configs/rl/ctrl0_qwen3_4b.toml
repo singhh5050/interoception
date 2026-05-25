@@ -1,0 +1,96 @@
+# Condition 0 — TREATMENT (clean re-run of v2 on the fixed env).
+#
+# Reward = c · f(t,T), f = min(1, T/t)  (reward_time_term=true; the FULL time reward).
+# Multi-turn with [Xs elapsed] injected. This is the ONLY config that uses the time
+# term in the loss. Identical to ctrlA in every other respect, so the treatment vs A
+# contrast isolates exactly the time reward, and vs B the time signal.
+#
+# Why re-run instead of re-using old v2: v2 trained on the buggy reward (Unicode-correct
+# answers scored 0, which also pushed the policy toward ASCII formatting; base was
+# undercounted ~3x). Re-running on the fixed env makes all three conditions share
+# identical training+eval code — no buggy-v2 confound in the comparison.
+#
+# Checkpointing: full weights (merged + adapter) every 50 steps -> 50/100/150/200.
+
+max_steps = 200
+seq_len = 2048
+output_dir = "/cache/runs/ctrl0_qwen3_4b"
+
+[ckpt]
+interval = 50
+
+[wandb]
+project = "interoception"
+name = "ctrl0-qwen3-4b-treatment"
+
+[model]
+name = "Qwen/Qwen3-4B-Instruct-2507"
+
+[trainer.model.lora]
+rank = 32
+alpha = 32.0
+dropout = 0.0
+target_modules = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+
+[trainer.ckpt.weights]
+save_adapter_separately = true
+
+[trainer.optim]
+type = "adamw"
+lr = 5e-5
+max_norm = 1.0
+betas1 = 0.9
+betas2 = 0.999
+weight_decay = 0.01
+
+[trainer.loss]
+type = "default"
+kl_tau = 1e-3
+
+[trainer.scheduler]
+type = "linear"
+warmup_steps = 10
+decay_steps = 10
+min_lr = 0.0
+
+[orchestrator]
+batch_size = 64
+rollouts_per_example = 8   # G=8 GRPO group size
+seed = 0
+
+[[orchestrator.filters]]
+type = "gibberish"
+[[orchestrator.filters]]
+type = "repetition"
+[[orchestrator.filters]]
+type = "zero_advantage"
+enforce = false
+
+[orchestrator.train.sampling]
+max_completion_tokens = 128
+temperature = 1.0
+
+[[orchestrator.train.env]]
+id = "interoception-countdown"
+name = "ctrl0-qwen3-4b-train"
+args = { problems_jsonl = "/root/data/train.jsonl", target_s_min = 15.0, target_s_max = 130.0, target_s_dist = "uniform", dataset_seed = 0, timing_source = "sim", hardware = "A100_80GB", sim_model = "Qwen3-4B", max_turns = 16, reward_shape = "hyperbolic", attempt_bonus = 0.0, enforce_max_time = false, reward_time_term = true }
+
+[orchestrator.eval]
+interval = 50
+
+[orchestrator.eval.sampling]
+max_completion_tokens = 128
+temperature = 1.0
+
+# Same eval protocol + dataset_seed=777 as ctrlA/ctrlB -> identical (problem, T) pairs
+# across all three conditions (paired comparison). reward_time_term=true here so the
+# eval Avg@1 is the c*f reward; is_correct / f_term are computed identically regardless.
+[[orchestrator.eval.env]]
+id = "interoception-countdown"
+name = "ctrl0-eval-uniform"
+num_examples = 498
+rollouts_per_example = 1
+args = { problems_jsonl = "/root/data/eval.jsonl", target_s_min = 15.0, target_s_max = 130.0, target_s_dist = "uniform", dataset_seed = 777, timing_source = "sim", hardware = "A100_80GB", sim_model = "Qwen3-4B", max_turns = 16, reward_shape = "hyperbolic", attempt_bonus = 0.0, enforce_max_time = false, reward_time_term = true }
+
+[inference]
+enable_fp32_lm_head = true
