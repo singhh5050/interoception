@@ -88,6 +88,42 @@ image = (
 app = modal.App(APP_NAME)
 
 
+@app.function(image=image, timeout=600)  # CPU only — hwprop is an analytical sim
+def chunk_latency_calc() -> str:
+    """Compute per-chunk simulated latency via hwprop across hardware x model configs.
+    A 'chunk' = one model turn of `decode_steps` tokens. Reports prefill (charged on
+    turn 1) and decode time per chunk; the model's elapsed-time signal accrues this
+    each turn. Used to size the chunk (max_completion_tokens/turn)."""
+    import subprocess, textwrap
+    script = textwrap.dedent('''
+        from hwprop.simulator import simulate_latency
+        HW = ["A100_80GB", "H100_SXM", "L40S"]
+        M = "Qwen3-4B"
+        def dec(hw, ctx, n): return simulate_latency(hw, M, prompt_len=ctx, decode_steps=n).total_decode_time_s
+
+        print(f"=== {M}: per-CHUNK decode time (s), by chunk size, at mid context (prompt_len=1024) ===")
+        CHUNKS = [16, 32, 64, 128, 256]
+        print("hardware     " + "".join(f"{c:>4}t " for c in CHUNKS))
+        for hw in HW:
+            print(f"{hw:11s}  " + "".join(f"{dec(hw,1024,c):>5.1f} " for c in CHUNKS))
+
+        print()
+        print(f"=== {M}: a 128-token chunk grows with context (prompt_len) ===")
+        CTX = [256, 1024, 1792]
+        print("hardware     " + "".join(f"ctx={c:<5}" for c in CTX))
+        for hw in HW:
+            print(f"{hw:11s}  " + "".join(f"{dec(hw,c,128):>6.1f}s  " for c in CTX))
+    ''')
+    r = subprocess.run(["/root/.local/bin/uv", "run", "python", "-c", script],
+                       cwd="/root/prime-rl", text=True, capture_output=True)
+    return (r.stdout or "") + ("\n[stderr]\n" + r.stderr[-600:] if r.returncode else "")
+
+
+@app.local_entrypoint()
+def chunk_latency():
+    print(chunk_latency_calc.remote())
+
+
 @app.function(
     # 2 GPUs: prime-rl runs vllm on one set, trainer on another. Matches the
     # gsm8k example's orchestrator gpu allocation pattern.
@@ -193,6 +229,22 @@ def v2():
     """v2 minimal single-cell run (Kanishk's spec): Qwen3-4B, hyperbolic c*min(1,T/t),
     no bonus, no 5T cutoff, 128 tok/chunk, T~U(15,130), G=8. See configs/rl/v2_qwen3_4b.toml."""
     cfgs = [("rl/v2_qwen3_4b.toml", "v2-qwen3-4b-hyp")]
+    calls = [(cfg, train_run.spawn(*cfg)) for cfg in cfgs]
+    for cfg, call in calls:
+        try:
+            r = call.get()
+        except Exception as e:
+            r = {"ok": False, "error": str(e)[:200]}
+        print(f"  {cfg[1]}: ok={r.get('ok')}  rc={r.get('returncode')}  dur={r.get('duration_s')}s  err={r.get('error', '')}")
+
+
+@app.local_entrypoint()
+def ctrl0_u1_40():
+    """Low-budget treatment re-run (Kanishk's 2026-05-26 thread): Condition 0 (c*f),
+    multi-turn 16 turns / 128 tok/chunk, [Xs elapsed] injected, A100_80GB sim, but
+    T~U(1,40) instead of U(15,130) so the budget is actually reachable within seq_len.
+    See configs/rl/ctrl0_u1_40_qwen3_4b.toml."""
+    cfgs = [("rl/ctrl0_u1_40_qwen3_4b.toml", "ctrl0-qwen3-4b-u1-40")]
     calls = [(cfg, train_run.spawn(*cfg)) for cfg in cfgs]
     for cfg, call in calls:
         try:

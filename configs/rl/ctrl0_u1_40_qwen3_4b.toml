@@ -1,0 +1,102 @@
+# Condition 0 — TREATMENT, LOW-BUDGET re-run (Kanishk's 2026-05-26 thread).
+#
+# Identical to ctrl0_qwen3_4b.toml in EVERY respect except the time-budget range:
+#   T ~ U(1, 40)  instead of  U(15, 130).
+#
+# Why: at A100_80GB + 128 tok/chunk a chunk costs ~4.5 s, and seq_len=2048 minus the
+# ~300-token system+problem prompt leaves only ~13-14 chunks of generation -> the model
+# can simulate AT MOST ~60 s of elapsed time. So under the old U(15,130) every budget
+# above ~60 s was physically unreachable: f = min(1, T/t) was pinned at 1 regardless of
+# pacing, killing the gradient. U(1,40) puts the ENTIRE budget range inside the reachable
+# window so f can actually vary and the time reward can shape behavior.
+#
+# Hardware unchanged (A100_80GB) per Kanishk, so no eval-time hardware mismatch. Chunk
+# size unchanged at 128 tok per Kanishk ("let's keep 128"). Budgets < ~4.5 s are below a
+# single chunk -> f<1 even for the fastest possible answer; that's intended, the reward
+# shapes it. enforce_max_time=false: decoding stops on max tokens, never on max time.
+#
+# Checkpointing: full weights (merged + adapter) every 50 steps -> 50/100/150/200,
+# matching the 3-way controls so this run is directly comparable.
+
+max_steps = 200
+seq_len = 2048
+output_dir = "/cache/runs/ctrl0_u1_40_qwen3_4b"
+
+[ckpt]
+interval = 50
+
+[wandb]
+project = "interoception"
+name = "ctrl0-qwen3-4b-u1-40"
+
+[model]
+name = "Qwen/Qwen3-4B-Instruct-2507"
+
+[trainer.model.lora]
+rank = 32
+alpha = 32.0
+dropout = 0.0
+target_modules = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+
+[trainer.ckpt.weights]
+save_adapter_separately = true
+
+[trainer.optim]
+type = "adamw"
+lr = 5e-5
+max_norm = 1.0
+betas1 = 0.9
+betas2 = 0.999
+weight_decay = 0.01
+
+[trainer.loss]
+type = "default"
+kl_tau = 1e-3
+
+[trainer.scheduler]
+type = "linear"
+warmup_steps = 10
+decay_steps = 10
+min_lr = 0.0
+
+[orchestrator]
+batch_size = 64
+rollouts_per_example = 8   # G=8 GRPO group size
+seed = 0
+
+[[orchestrator.filters]]
+type = "gibberish"
+[[orchestrator.filters]]
+type = "repetition"
+[[orchestrator.filters]]
+type = "zero_advantage"
+enforce = false
+
+[orchestrator.train.sampling]
+max_completion_tokens = 128
+temperature = 1.0
+
+[[orchestrator.train.env]]
+id = "interoception-countdown"
+name = "ctrl0-u1-40-qwen3-4b-train"
+args = { problems_jsonl = "/root/data/train.jsonl", target_s_min = 1.0, target_s_max = 40.0, target_s_dist = "uniform", dataset_seed = 0, timing_source = "sim", hardware = "A100_80GB", sim_model = "Qwen3-4B", max_turns = 16, reward_shape = "hyperbolic", attempt_bonus = 0.0, enforce_max_time = false, reward_time_term = true }
+
+[orchestrator.eval]
+interval = 50
+
+[orchestrator.eval.sampling]
+max_completion_tokens = 128
+temperature = 1.0
+
+# Eval matches the new training budget range (U(1,40)) so the accuracy-vs-T slope is
+# measured where the model was actually trained. dataset_seed=777 keeps the (problem, T)
+# pairs fixed for a clean base-vs-final paired comparison within this run.
+[[orchestrator.eval.env]]
+id = "interoception-countdown"
+name = "ctrl0-u1-40-eval-uniform"
+num_examples = 498
+rollouts_per_example = 1
+args = { problems_jsonl = "/root/data/eval.jsonl", target_s_min = 1.0, target_s_max = 40.0, target_s_dist = "uniform", dataset_seed = 777, timing_source = "sim", hardware = "A100_80GB", sim_model = "Qwen3-4B", max_turns = 16, reward_shape = "hyperbolic", attempt_bonus = 0.0, enforce_max_time = false, reward_time_term = true }
+
+[inference]
+enable_fp32_lm_head = true
