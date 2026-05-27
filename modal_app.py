@@ -255,6 +255,31 @@ def ctrl0_u1_40():
 
 
 @app.local_entrypoint()
+def next_long_qwen3_4b():
+    """NEXT EXP — "train for longer" (Kanishk 2026-05-26): ctrl0_u1_40 setup, 500 steps.
+    Identical treatment (c*f, T~U(1,40), 128 tok/chunk, 16 turns, A100); only max_steps
+    and ckpt cadence change. See docs/HANDOFF.md."""
+    _launch_one("rl/ctrl0_u1_40_long_qwen3_4b.toml", "ctrl0-qwen3-4b-u1-40-long")
+
+
+@app.local_entrypoint()
+def next_yolo_qwen25_3b():
+    """NEXT EXP — YOLO run with Qwen2.5-3B-Instruct (Kanishk 2026-05-26): same U(1,40)
+    treatment, swapped policy model + sim_model. See docs/HANDOFF.md."""
+    _launch_one("rl/ctrl0_u1_40_qwen25_3b.toml", "ctrl0-qwen25-3b-u1-40-yolo")
+
+
+def _launch_one(toml_name: str, run_name: str):
+    """Spawn a single train_run and print its result (shared by the next-exp launchers)."""
+    call = train_run.spawn(toml_name, run_name)
+    try:
+        r = call.get()
+    except Exception as e:
+        r = {"ok": False, "error": str(e)[:200]}
+    print(f"  {run_name}: ok={r.get('ok')}  rc={r.get('returncode')}  dur={r.get('duration_s')}s  err={r.get('error', '')}")
+
+
+@app.local_entrypoint()
 def controls_smoke():
     """Short smoke of the REAL ctrlA/ctrlB configs (4 steps, ckpt every 2) to validate
     config validation + the new env flags + B's single-turn path BEFORE the full run.

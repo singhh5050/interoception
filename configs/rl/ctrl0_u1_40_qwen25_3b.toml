@@ -1,0 +1,93 @@
+# NEXT EXPERIMENT (Kanishk's 2026-05-26 thread): "a yolo run with qwen2.5-3b-instruct".
+#
+# Same treatment setup as ctrl0_u1_40_long_qwen3_4b.toml (c*f, multi-turn, [Xs elapsed],
+# T~U(1,40), 128 tok/chunk, 16 turns, 500 steps) but swaps the policy model:
+#   model.name   Qwen/Qwen3-4B-Instruct-2507 -> Qwen/Qwen2.5-3B-Instruct
+#   sim_model    "Qwen3-4B" -> "Qwen2.5-3B"   (so hwprop charges 3B decode time, not 4B)
+#
+# Heads-up: a 3B model decodes faster than the 4B (less weight bandwidth/token), so a
+# 128-tok chunk is ~3.4 s instead of ~4.5 s on A100. Total solve time is still
+# tokens x per-token-time, so the same "model misses tight budgets" dynamic applies; this
+# is a YOLO capability check (does a different/smaller instruct model pace any differently),
+# not a tuned comparison. LoRA target_modules are the same names for Qwen2.5. See
+# docs/HANDOFF.md.
+
+max_steps = 500
+seq_len = 2048
+output_dir = "/cache/runs/ctrl0_u1_40_qwen25_3b"
+
+[ckpt]
+interval = 100
+
+[wandb]
+project = "interoception"
+name = "ctrl0-qwen25-3b-u1-40-yolo"
+
+[model]
+name = "Qwen/Qwen2.5-3B-Instruct"
+
+[trainer.model.lora]
+rank = 32
+alpha = 32.0
+dropout = 0.0
+target_modules = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+
+[trainer.ckpt.weights]
+save_adapter_separately = true
+
+[trainer.optim]
+type = "adamw"
+lr = 5e-5
+max_norm = 1.0
+betas1 = 0.9
+betas2 = 0.999
+weight_decay = 0.01
+
+[trainer.loss]
+type = "default"
+kl_tau = 1e-3
+
+[trainer.scheduler]
+type = "linear"
+warmup_steps = 10
+decay_steps = 10
+min_lr = 0.0
+
+[orchestrator]
+batch_size = 64
+rollouts_per_example = 8   # G=8 GRPO group size
+seed = 0
+
+[[orchestrator.filters]]
+type = "gibberish"
+[[orchestrator.filters]]
+type = "repetition"
+[[orchestrator.filters]]
+type = "zero_advantage"
+enforce = false
+
+[orchestrator.train.sampling]
+max_completion_tokens = 128
+temperature = 1.0
+
+[[orchestrator.train.env]]
+id = "interoception-countdown"
+name = "ctrl0-u1-40-qwen25-3b-train"
+args = { problems_jsonl = "/root/data/train.jsonl", target_s_min = 1.0, target_s_max = 40.0, target_s_dist = "uniform", dataset_seed = 0, timing_source = "sim", hardware = "A100_80GB", sim_model = "Qwen2.5-3B", max_turns = 16, reward_shape = "hyperbolic", attempt_bonus = 0.0, enforce_max_time = false, reward_time_term = true }
+
+[orchestrator.eval]
+interval = 50
+
+[orchestrator.eval.sampling]
+max_completion_tokens = 128
+temperature = 1.0
+
+[[orchestrator.eval.env]]
+id = "interoception-countdown"
+name = "ctrl0-u1-40-qwen25-3b-eval-uniform"
+num_examples = 498
+rollouts_per_example = 1
+args = { problems_jsonl = "/root/data/eval.jsonl", target_s_min = 1.0, target_s_max = 40.0, target_s_dist = "uniform", dataset_seed = 777, timing_source = "sim", hardware = "A100_80GB", sim_model = "Qwen2.5-3B", max_turns = 16, reward_shape = "hyperbolic", attempt_bonus = 0.0, enforce_max_time = false, reward_time_term = true }
+
+[inference]
+enable_fp32_lm_head = true
