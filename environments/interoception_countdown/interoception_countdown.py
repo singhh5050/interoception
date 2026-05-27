@@ -147,17 +147,19 @@ class CountdownTimeBudgetEnv(vf.MultiTurnEnv):
         # target_s resolution order:
         #   1. pre-set state["target_s"] (eval pins this for fixed-budget cells)
         #   2. state["info"]["target_s"] (set by _load_dataset, one T per problem)
-        #   3. fallback: sample log-uniform (legacy path; not used in phase1)
         # Reading from info is the GRPO-correctness path — all rollouts of one
-        # problem share T, so the group advantage estimate is meaningful.
+        # problem share T, so the group advantage estimate is meaningful. If
+        # info["target_s"] is missing, fail loud: a per-rollout fallback would
+        # silently re-introduce the original group-baseline poisoning bug.
         if "target_s" not in state:
             info = state.get("info") or {}
             t = info.get("target_s")
             if t is None:
-                log_T = random.uniform(
-                    math.log(self.cfg.target_s_min), math.log(self.cfg.target_s_max)
+                raise RuntimeError(
+                    "info['target_s'] missing — every row must be assigned T at "
+                    "load time (see _load_dataset) for GRPO group-baseline "
+                    "correctness; per-rollout sampling poisons the group advantage."
                 )
-                t = math.exp(log_T)
             state["target_s"] = t
         state["elapsed_s"] = 0.0
         state["answer_emitted"] = False
@@ -612,9 +614,6 @@ def load_environment(**kwargs) -> vf.Environment:
     if cfg.timing_source == "sim":
         from hwprop.simulator import simulate_latency
         simulate_latency(cfg.hardware, cfg.sim_model, prompt_len=1, decode_steps=1)
-
-    # Seed the env's module-level random for any non-dataset RNG paths.
-    random.seed(cfg.dataset_seed)
 
     dataset = _load_dataset(cfg.problems_jsonl, cfg)
 
