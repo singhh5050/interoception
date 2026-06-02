@@ -716,3 +716,14 @@ def next_long_strict_qwen3_4b():
     habit (as the quiet-prompt-trained long-500 does, r=+0.15).
     See configs/rl/ctrl0_u1_40_long_strict_qwen3_4b.toml."""
     _launch_one("rl/ctrl0_u1_40_long_strict_qwen3_4b.toml", "ctrl0-qwen3-4b-u1-40-long-strict")
+
+
+@app.local_entrypoint()
+def next_strict_conly_qwen3_4b():
+    """NEXT EXP (Kanishk-track, 2026-06-01) — the thread's "ctrlC": strict/remaining_budget
+    prompt + CORRECTNESS-ONLY reward (reward_time_term=false => R = c). Tests whether RL on
+    correctness alone, under the loud prompt, preserves the base model's calibration
+    (r=+0.77) without any explicit time-reward term. Uses G=16 / batch=128 (vs G=8/64 for
+    the c·f strict probe — NOT a batch-matched A/B; see config header).
+    See configs/rl/ctrl0_u1_40_strict_conly_qwen3_4b.toml."""
+    _launch_one("rl/ctrl0_u1_40_strict_conly_qwen3_4b.toml", "ctrl0-qwen3-4b-u1-40-strict-conly")

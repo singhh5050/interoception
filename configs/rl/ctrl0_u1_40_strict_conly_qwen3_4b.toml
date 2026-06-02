@@ -1,0 +1,119 @@
+# STRICT/REMAINING-BUDGET prompt + CORRECTNESS-ONLY reward (Kanishk-track, 2026-06-01).
+#
+# This is the run the Slack thread calls "ctrlC" (strong-prompt, c-only). Named
+# `strict_conly` here on purpose: the repo already uses ctrlA (no time reward) and
+# ctrlB (no elapsed signal) for the f(t,T) ablation, so a bare "ctrlC" file would be
+# easy to confuse with those. Reward-wise this IS ctrlA's reward (reward_time_term=
+# false => R = c, pure correctness) layered on the strict/remaining_budget prompt.
+#
+# Motivation (Michael + Kanishk, 2026-06-01): base Qwen3-4B + remaining_budget prompt
+# is already well-calibrated (Pearson r(commit_time, T) = +0.77). long-500, RL'd on c·f
+# under the QUIET prompt, destroyed that (r=+0.15). Question: does RL on correctness
+# ALONE, under the loud prompt, PRESERVE the base model's calibration? If yes, we don't
+# need a calibration reward term at all. If it flattens, the additive c + f term becomes
+# the natural follow-up on top of this checkpoint.
+#
+# Derived from ctrl0_u1_40_long_strict_qwen3_4b.toml. Differences:
+#   reward_time_term      true -> FALSE   (train AND eval) -> R = c, pure correctness.
+#                                         reward_shape stays "hyperbolic" but is INERT:
+#                                         _correctness_term returns 1.0 for a correct
+#                                         answer before any shape/alpha logic runs.
+#   rollouts_per_example  8 -> 16         (G=16; lower-variance GRPO group baseline)
+#   batch_size            64 -> 128       (still 8 unique prompts/step: 128/16 = 8)
+#   output_dir / wandb.name / env names   -> *strict-conly*
+#
+# IMPORTANT — experimental-design note so we don't trip on it later:
+#   This run uses G=16 / batch=128. The c·f strict probe (ctrl0_u1_40_long_strict) used
+#   G=8 / batch=64. So this is NOT a clean batch-matched reward A/B against that run.
+#   The PRIMARY comparison is base (strong prompt, r=+0.77) vs THIS run's final ckpt,
+#   both eval'd with the strong prompt — batch size doesn't touch that comparison.
+#
+# GPU topology is UNCHANGED: prime-rl runs vLLM on 1 A100 + trainer on the other
+# (gpu="A100-80GB:2", as every prior run). The bigger batch is memory-safe: prime-rl
+# packs rollouts into seq_len(2048)-sized micro-batches and grad-accumulates across them
+# (trainer/rl/train.py), so PEAK trainer memory is bounded by seq_len, NOT batch_size.
+# Raising batch 64->128 only adds accumulation micro-steps (longer step time), same peak.
+# (For reference, prime-rl's gsm8k config ships batch_size=512 on the default trainer.)
+# There is no micro-batch-count knob; if memory ever needed cutting the levers are
+# trainer.act_ckpt / act_offload or a smaller seq_len.
+
+max_steps = 500
+seq_len = 2048
+output_dir = "/cache/runs/ctrl0_u1_40_strict_conly_qwen3_4b"
+
+[ckpt]
+interval = 100
+
+[wandb]
+project = "interoception"
+entity = "singhh5050-stanford-university"
+name = "ctrl0-qwen3-4b-u1-40-strict-conly"
+
+[model]
+name = "Qwen/Qwen3-4B-Instruct-2507"
+
+[trainer.model.lora]
+rank = 32
+alpha = 32.0
+dropout = 0.0
+target_modules = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+
+[trainer.ckpt.weights]
+save_adapter_separately = true
+
+[trainer.optim]
+type = "adamw"
+lr = 5e-5
+max_norm = 1.0
+betas1 = 0.9
+betas2 = 0.999
+weight_decay = 0.01
+
+[trainer.loss]
+type = "default"
+kl_tau = 1e-3
+
+[trainer.scheduler]
+type = "linear"
+warmup_steps = 10
+decay_steps = 10
+min_lr = 0.0
+
+[orchestrator]
+batch_size = 128
+rollouts_per_example = 16   # G=16 GRPO group size (8 unique prompts/step)
+seed = 0
+
+[[orchestrator.filters]]
+type = "gibberish"
+[[orchestrator.filters]]
+type = "repetition"
+[[orchestrator.filters]]
+type = "zero_advantage"
+enforce = false
+
+[orchestrator.train.sampling]
+max_completion_tokens = 128
+temperature = 1.0
+
+[[orchestrator.train.env]]
+id = "interoception-countdown"
+name = "ctrl0-u1-40-strict-conly-qwen3-4b-train"
+args = { problems_jsonl = "/root/data/train.jsonl", target_s_min = 1.0, target_s_max = 40.0, target_s_dist = "uniform", dataset_seed = 0, timing_source = "sim", hardware = "A100_80GB", sim_model = "Qwen3-4B", max_turns = 16, reward_shape = "hyperbolic", attempt_bonus = 0.0, enforce_max_time = false, reward_time_term = false, prompt_variant = "remaining_budget" }
+
+[orchestrator.eval]
+interval = 50
+
+[orchestrator.eval.sampling]
+max_completion_tokens = 128
+temperature = 1.0
+
+[[orchestrator.eval.env]]
+id = "interoception-countdown"
+name = "ctrl0-u1-40-strict-conly-eval-uniform"
+num_examples = 498
+rollouts_per_example = 1
+args = { problems_jsonl = "/root/data/eval.jsonl", target_s_min = 1.0, target_s_max = 40.0, target_s_dist = "uniform", dataset_seed = 777, timing_source = "sim", hardware = "A100_80GB", sim_model = "Qwen3-4B", max_turns = 16, reward_shape = "hyperbolic", attempt_bonus = 0.0, enforce_max_time = false, reward_time_term = false, prompt_variant = "remaining_budget" }
+
+[inference]
+enable_fp32_lm_head = true
