@@ -1,0 +1,89 @@
+# VoC reward-space SCREEN — cell 2/3: OVERBUDGET + ρ_q (Harsh-track, 2026-06-04).
+# Reward: R = c − γ · ρ_q · max(0, t−T)/voc_t_max  (γ=1.0, voc_t_max=53) [voc_cost="overbudget"]
+# Free under budget (so commit-time can track T), penalize only overshoot, normalized by the
+# 12-turn elapsed ceiling (53s) → bounded. ρ_q makes it difficulty-aware. Screen vs cell 1
+# (clip shape: penalize-all-time, budget-relative) and cell 3 (clip, no ρ_q).
+#
+# Shared screen protocol: 100 steps, G=32/batch=256, ckpt 25, lr 5e-5, warmup/decay 2,
+# remaining_budget prompt, T~U(1,40), max_turns=12 (fits seq_len=2048), 128 tok/chunk.
+
+max_steps = 100
+seq_len = 2048
+output_dir = "/cache/runs/ctrl0_u1_40_voc_overbudget_qwen3_4b"
+
+[ckpt]
+interval = 25
+
+[wandb]
+project = "interoception"
+entity = "singhh5050-stanford-university"
+name = "ctrl0-qwen3-4b-u1-40-voc-overbudget"
+
+[model]
+name = "Qwen/Qwen3-4B-Instruct-2507"
+
+[trainer.model.lora]
+rank = 32
+alpha = 32.0
+dropout = 0.0
+target_modules = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+
+[trainer.ckpt.weights]
+save_adapter_separately = true
+
+[trainer.optim]
+type = "adamw"
+lr = 5e-5
+max_norm = 1.0
+betas1 = 0.9
+betas2 = 0.999
+weight_decay = 0.01
+
+[trainer.loss]
+type = "default"
+kl_tau = 1e-3
+
+[trainer.scheduler]
+type = "linear"
+warmup_steps = 2
+decay_steps = 2
+min_lr = 0.0
+
+[orchestrator]
+batch_size = 256
+rollouts_per_example = 32
+seed = 0
+
+[[orchestrator.filters]]
+type = "gibberish"
+[[orchestrator.filters]]
+type = "repetition"
+[[orchestrator.filters]]
+type = "zero_advantage"
+enforce = false
+
+[orchestrator.train.sampling]
+max_completion_tokens = 128
+temperature = 1.0
+
+[[orchestrator.train.env]]
+id = "interoception-countdown"
+name = "ctrl0-u1-40-voc-overbudget-train"
+args = { problems_jsonl = "/root/data/train.jsonl", target_s_min = 1.0, target_s_max = 40.0, target_s_dist = "uniform", dataset_seed = 0, timing_source = "sim", hardware = "A100_80GB", sim_model = "Qwen3-4B", max_turns = 12, reward_shape = "voc_alp", voc_cost = "overbudget", voc_use_rho = true, voc_t_max = 53.0, gamma = 1.0, attempt_bonus = 0.0, enforce_max_time = false, reward_time_term = true, prompt_variant = "remaining_budget" }
+
+[orchestrator.eval]
+interval = 50
+
+[orchestrator.eval.sampling]
+max_completion_tokens = 128
+temperature = 1.0
+
+[[orchestrator.eval.env]]
+id = "interoception-countdown"
+name = "ctrl0-u1-40-voc-overbudget-eval-uniform"
+num_examples = 498
+rollouts_per_example = 1
+args = { problems_jsonl = "/root/data/eval.jsonl", target_s_min = 1.0, target_s_max = 40.0, target_s_dist = "uniform", dataset_seed = 777, timing_source = "sim", hardware = "A100_80GB", sim_model = "Qwen3-4B", max_turns = 12, reward_shape = "voc_alp", voc_cost = "overbudget", voc_use_rho = true, voc_t_max = 53.0, gamma = 1.0, attempt_bonus = 0.0, enforce_max_time = false, reward_time_term = true, prompt_variant = "remaining_budget" }
+
+[inference]
+enable_fp32_lm_head = true

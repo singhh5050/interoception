@@ -558,6 +558,22 @@ def eval_prompt_salience(
               f"dur={r.get('duration_s')}s  err={r.get('error', '')}")
 
 
+@app.local_entrypoint()
+def eval_strict_conly():
+    """Calibration eval for the strict-conly (ctrlC) step_500 checkpoint under the
+    remaining_budget prompt — the cell directly comparable to base (r=+0.78) and
+    long-500 (r=+0.13). Writes /cache/eval_rollouts/prompt_salience/strict-conly_remaining_budget.jsonl;
+    pull it and compute corr(elapsed_s, target_s) to see if correctness-only RL
+    preserved the base model's T-calibration."""
+    adapter = "/cache/runs/ctrl0_u1_40_strict_conly_qwen3_4b/weights/step_500/lora_adapters"
+    call = eval_prompt_salience_run.spawn(
+        adapter_path=adapter, adapter_name="strict-conly", run_label="strict-conly",
+        variants=("remaining_budget",), num_examples=498)
+    r = call.get()
+    print(f"  strict-conly/remaining_budget: ok={r.get('ok')} rc={r.get('returncode')} "
+          f"dur={r.get('duration_s')}s out={r.get('out_dir')} err={r.get('error','')}")
+
+
 # ---------------------------------------------------------------------------
 # Resume-from-step-500 extension (Kanishk, 2026-05-29). Copies the long-500
 # step_500 checkpoint into the extension's output_dir, then launches train_run
@@ -788,6 +804,71 @@ def next_long_additive_qwen3_4b():
     See configs/rl/ctrl0_u1_40_long_additive_qwen3_4b.toml."""
     _launch_one("rl/ctrl0_u1_40_long_additive_qwen3_4b.toml",
                 "ctrl0-qwen3-4b-u1-40-long-additive")
+
+
+@app.local_entrypoint()
+def voc_smoke():
+    """Re-smoke the clip arithmetic + max_turns=12 on the clip-rho cell BEFORE the screen.
+    Overrides: max_steps=4, ckpt.interval=2, scheduler warmup=1/decay=2, small group
+    (batch=16, G=4 -> 4 groups/step) for fast feedback. Confirms voc_alp(clip) is detected
+    as a GroupRewardFunc, run_group fires, pass_rate (ρ_q) logs in [0,1], reward sane,
+    max_turns=12 respected, no crash. Writes to a *_smoke dir so it doesn't touch the run."""
+    common = [
+        "--max-steps", "4", "--ckpt.interval", "2",
+        "--trainer.scheduler.warmup-steps", "1", "--trainer.scheduler.decay-steps", "2",
+        "--orchestrator.batch-size", "16", "--orchestrator.rollouts-per-example", "4",
+        "--output-dir", "/cache/runs/voc_smoke",
+    ]
+    print("Launching voc smoke (clip-rho): 4 steps, G=4/batch=16, ckpt every 2")
+    call = train_run.spawn(
+        "rl/ctrl0_u1_40_voc_clip_rho_qwen3_4b.toml", "voc-smoke", extra_args=common,
+    )
+    try:
+        r = call.get()
+    except Exception as e:
+        r = {"ok": False, "error": str(e)[:200]}
+    print(f"  voc-smoke: ok={r.get('ok')}  rc={r.get('returncode')}  "
+          f"dur={r.get('duration_s')}s  log={r.get('log_dir')}  err={r.get('error', '')}")
+
+
+@app.local_entrypoint()
+def sweep_voc_rewards():
+    """VoC reward-space SCREEN (Harsh-track, 2026-06-04): 3 structurally distinct time-cost
+    forms, 100 steps each, launched in PARALLEL (one Modal container per cell, own wandb
+    project so parallel run-ids don't collide). All share: G=32/batch=256, remaining_budget
+    prompt, T~U(1,40), max_turns=12 (fits seq_len=2048).
+      clip-rho   : c − 0.3·ρ_q·min(t/T,5)       (penalize-all-time, budget-relative, ALP)
+      overbudget : c − 1.0·ρ_q·max(0,t−T)/53    (free under budget, overage-only, ALP)
+      clip-norho : c − 0.1·min(t/T,5)           (clip, NO ρ_q — the difficulty ablation)
+    Reads from 3 runs: shape (clip-rho vs overbudget) and ρ_q (clip-rho vs clip-norho).
+    Watch reward / is_correct / f_term / pass_rate / elapsed_over_target FIRST, then run the
+    decoupled calibration probe on the step_25..100 ckpts (with max_turns=12)."""
+    import concurrent.futures as _f
+    cells = [
+        ("rl/ctrl0_u1_40_voc_clip_rho_qwen3_4b.toml",   "ctrl0-qwen3-4b-u1-40-voc-clip-rho",   "interoception-voc-cliprho"),
+        ("rl/ctrl0_u1_40_voc_overbudget_qwen3_4b.toml", "ctrl0-qwen3-4b-u1-40-voc-overbudget", "interoception-voc-ob"),
+        ("rl/ctrl0_u1_40_voc_clip_norho_qwen3_4b.toml", "ctrl0-qwen3-4b-u1-40-voc-clip-norho", "interoception-voc-clipnorho"),
+    ]
+    print(f"Launching {len(cells)}-cell VoC reward-space screen (100 steps each, parallel)")
+
+    def _launch(cfg, name, proj):
+        try:
+            r = train_run.remote(cfg, name, wandb_project=proj)
+        except Exception as e:
+            r = {"ok": False, "error": str(e)[:200]}
+        return name, r
+
+    with _f.ThreadPoolExecutor(max_workers=len(cells)) as ex:
+        futs = [ex.submit(_launch, *c) for c in cells]
+        results = {}
+        for fut in _f.as_completed(futs):
+            name, r = fut.result()
+            results[name] = r
+            print(f"  {name}: ok={r.get('ok')}  rc={r.get('returncode')}  "
+                  f"dur={r.get('duration_s')}s  err={r.get('error', '')}")
+    print("\n=== SCREEN COMPLETE ===")
+    for _, name, _proj in cells:
+        print(f"  {name}: {results.get(name)}")
 
 
 @app.local_entrypoint()

@@ -70,13 +70,37 @@ class InteroceptionConfig(BaseModel):
     #     model can't learn "be on time even if uncertain" — RL converges to a fixed-
     #     commit-time policy that ignores T. Additive keeps timing as a marginal reward
     #     target even when c is high. λ_f ∈ ~[0.25, 1.0] is the useful range.
-    reward_shape: Literal["hyperbolic", "exponential", "asymmetric", "additive"] = "hyperbolic"
+    #   "voc_alp"     : c − γ · [ρ_q] · time_cost  — a GROUP reward (online pass rate ρ_q
+    #     over the GRPO group, ALP-style, Xiang et al. 2025, arXiv 2506.05256). The time
+    #     cost is switchable via voc_cost: "overbudget" = max(0,t−T)/voc_t_max (free under
+    #     budget, bounded) or "clip" = min(t/T, voc_clip_k) (budget-relative, clipped).
+    #     ρ_q applied iff voc_use_rho. See voc_alp() and the config knobs below.
+    reward_shape: Literal["hyperbolic", "exponential", "asymmetric", "additive", "voc_alp"] = "hyperbolic"
     # Exponential decay coefficient (only used when reward_shape="exponential").
     reward_alpha: float = 1.0
     # Weight on the time term f(t,T) when reward_shape="additive". Reward becomes
     # c + lambda_f · f(t,T). λ=0.5 is the recommended starting point (correctness
     # still dominates but pacing is always present).
     lambda_f: float = 0.5
+    # voc_alp knobs. Reward = c − gamma · [ρ_q] · time_cost, where time_cost is one of:
+    #   voc_cost="overbudget": max(0, t − target_s) / voc_t_max  (free under budget;
+    #     penalizes only overshoot, normalized by the global elapsed ceiling -> bounded).
+    #   voc_cost="clip":       min(t / target_s, voc_clip_k)     (budget-relative t/T,
+    #     clipped at K so small-T rollouts don't explode; preserves per-problem scaling).
+    # voc_use_rho toggles the ALP difficulty weighting (ρ_q = online group pass rate).
+    # gamma is the strength knob; its scale differs a lot by cost form (clip's t/T basis
+    # is ~6x the overbudget basis), so grounded gamma differs per cell — see configs.
+    voc_cost: Literal["overbudget", "clip"] = "overbudget"
+    gamma: float = 0.5
+    voc_use_rho: bool = True
+    # Clip ceiling for voc_cost="clip": cap t/T at K (≈5 ⇒ "≥5x over budget is a problem
+    # the model can't meet; further overshoot is noise"). Unused for overbudget.
+    voc_clip_k: float = 5.0
+    # Elapsed-normalization ceiling (seconds) for voc_cost="overbudget". With max_turns=12
+    # (set so a full rollout fits seq_len=2048: 148+12*128+11*22=1926 tok), the max elapsed
+    # a non-committing rollout can reach is ~53.95s (hwprop, A100, 128 tok/chunk), so 53
+    # keeps max(0,t-T)/voc_t_max in [0,1]. Unused for clip.
+    voc_t_max: float = 53.0
     # Control flags for the f(t,T) ablations (Kanishk's 2026-05-24 controls thread):
     #   reward_time_term=False -> f(t,T)=1 always, so the reward collapses to pure
     #     correctness c (no timing term). Used by control A (no time reward) and
@@ -240,6 +264,11 @@ class CountdownTimeBudgetEnv(vf.MultiTurnEnv):
             "enforce_max_time": self.cfg.enforce_max_time,
             "attempt_bonus": self.cfg.attempt_bonus,
             "reward_time_term": self.cfg.reward_time_term,
+            "gamma": self.cfg.gamma,
+            "voc_t_max": self.cfg.voc_t_max,
+            "voc_cost": self.cfg.voc_cost,
+            "voc_use_rho": self.cfg.voc_use_rho,
+            "voc_clip_k": self.cfg.voc_clip_k,
             # Needed so the reward-time elapsed finalizer (_finalize_elapsed) can
             # recompute sim latency over the FULL trajectory, incl. the final turn.
             "timing_source": self.cfg.timing_source,
@@ -630,6 +659,64 @@ def mean_completion_tokens(state, **_) -> float:
     return float(sum(_step_usage(step)[1] for step in state.get("trajectory", [])))
 
 
+# --- voc_alp: ALP-style difficulty-aware time cost (GROUP rewards) ---
+# These take the WHOLE GRPO group at once. verifiers detects a func as a
+# GroupRewardFunc by signature (Rubric._is_group_func): naming a plural param like
+# `states`/`answers` is what flips it. The env's CountdownTimeBudgetEnv then routes
+# scoring through run_group -> Rubric.score_group, which calls these ONCE per group
+# with exactly the G rollouts of one prompt (all sharing the same problem + T), in
+# order. ρ_q = #correct / G is therefore just the mean correctness over `states`.
+
+def _group_pass_rate(states, answers) -> tuple[list[float], list[float], float]:
+    """Shared helper: returns (correctness c_i, elapsed t_i, ρ_q) over the group."""
+    c = [1.0 if _bucket(s, a) == "correct" else 0.0 for s, a in zip(states, answers)]
+    t = [_elapsed(s) for s in states]
+    rho_q = sum(c) / len(c) if c else 0.0
+    return c, t, rho_q
+
+
+@vf.reward
+def voc_alp(states, answers, **_) -> list[float]:
+    """R_i = c_i − γ · [ρ_q] · time_cost_i, a GROUP reward (one call per GRPO group).
+
+    time_cost depends on cfg.voc_cost:
+      "overbudget": max(0, t_i − T_i) / voc_t_max — free under budget (so commit-time
+        can track T), penalize only overshoot, normalized by the global ceiling -> bounded.
+      "clip":       min(t_i / T_i, voc_clip_k)   — budget-relative t/T (marginal cost per
+        second ∝ 1/T, so larger budgets make time cheaper -> commit-time scales with T),
+        clipped at K so small-T rollouts don't explode.
+
+    ρ_q (online group pass rate) is applied iff cfg.voc_use_rho — the ALP difficulty
+    weighting (Xiang et al. 2025): easy problems (high ρ_q) penalized harder, hard ones
+    (low ρ_q) allowed to run longer. With ρ_q on, an all-wrong group has ρ_q=0 → cost 0 →
+    zero within-group advantage → no update. Wrong-but-slow rollouts still pay the cost,
+    so pacing has a gradient even on wrong answers."""
+    cfg = (states[0].get("_cfg") if states else None) or {}
+    gamma = cfg.get("gamma", 0.5)
+    t_max = cfg.get("voc_t_max", 72.0) or 1.0
+    cost_kind = cfg.get("voc_cost", "overbudget")
+    K = cfg.get("voc_clip_k", 5.0)
+    rho = (lambda r: r) if cfg.get("voc_use_rho", True) else (lambda r: 1.0)
+    c, t, rho_q = _group_pass_rate(states, answers)
+    T = [s.get("target_s", 0.0) for s in states]
+    out = []
+    for c_i, t_i, T_i in zip(c, t, T):
+        if cost_kind == "clip":
+            term = min(t_i / T_i, K) if T_i > 0 else K
+        else:  # overbudget
+            term = max(0.0, t_i - T_i) / t_max
+        out.append(c_i - gamma * rho(rho_q) * term)
+    return out
+
+
+@vf.reward
+def pass_rate(states, answers, **_) -> list[float]:
+    """Online group pass rate ρ_q, logged per rollout (weight 0 diagnostic) so the
+    difficulty signal driving voc_alp is visible on wandb."""
+    _, _, rho_q = _group_pass_rate(states, answers)
+    return [rho_q] * len(states)
+
+
 def _load_dataset(jsonl_path: str, cfg: InteroceptionConfig) -> Dataset:
     """Load problems and assign each one a deterministic target_s.
 
@@ -719,6 +806,13 @@ def load_environment(**kwargs) -> vf.Environment:
         reward_funcs = [
             (is_correct, 1.0),
             (f_term, cfg.lambda_f),
+        ]
+    elif cfg.reward_shape == "voc_alp":
+        # c − γ·ρ_q·(t/voc_t_max). voc_alp is a GROUP reward (sees the whole GRPO
+        # group) so the rubric routes through score_group; ρ_q is logged at weight 0.
+        reward_funcs = [
+            (voc_alp, 1.0),
+            (pass_rate, 0.0),
         ]
     else:  # hyperbolic or exponential
         reward_funcs = [
