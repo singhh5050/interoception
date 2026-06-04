@@ -1,0 +1,100 @@
+# ADDITIVE-REWARD v2 sweep / cell λ=0.30 (Kanishk-track, 2026-06-03).
+#
+# v1 (lambda_f=0.5, 100 steps) succeeded on T-tracking (r=+0.882, vs base=+0.765)
+# but accuracy collapsed (0.106 vs 0.18). Training: c flat ~0.10, f→0.95.
+# v2 is a 3-cell sweep over λ ∈ {0.10, 0.15, 0.30} to map the Pareto front.
+#
+# Shared v2 protocol (all 3 cells):
+#   max_steps            200      (was 100)
+#   ckpt.interval        25       (8 ckpts: 25, 50, ..., 200)
+#   batch_size           128      (G=16/batch=128 new project default)
+#   rollouts_per_example 16
+#   warmup_steps         4
+#   decay_steps          4
+#   lr                   5e-5     (unchanged from v1)
+#   reward_shape         additive
+#   prompt_variant       remaining_budget
+#
+# Cell λ=0.30: heaviest pacing bonus in the sweep — halfway to v1's λ=0.5,
+# probes how much pacing-dominance we can tolerate before correctness collapses again.
+
+max_steps = 200
+seq_len = 2048
+output_dir = "/cache/runs/ctrl0_u1_40_long_additive_v2_l30_qwen3_4b"
+
+[ckpt]
+interval = 25
+
+[wandb]
+project = "interoception"
+entity = "singhh5050-stanford-university"
+name = "ctrl0-qwen3-4b-u1-40-long-additive-v2-l30"
+
+[model]
+name = "Qwen/Qwen3-4B-Instruct-2507"
+
+[trainer.model.lora]
+rank = 32
+alpha = 32.0
+dropout = 0.0
+target_modules = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+
+[trainer.ckpt.weights]
+save_adapter_separately = true
+
+[trainer.optim]
+type = "adamw"
+lr = 5e-5
+max_norm = 1.0
+betas1 = 0.9
+betas2 = 0.999
+weight_decay = 0.01
+
+[trainer.loss]
+type = "default"
+kl_tau = 1e-3
+
+[trainer.scheduler]
+type = "linear"
+warmup_steps = 4
+decay_steps = 4
+min_lr = 0.0
+
+[orchestrator]
+batch_size = 128
+rollouts_per_example = 16
+seed = 0
+
+[[orchestrator.filters]]
+type = "gibberish"
+[[orchestrator.filters]]
+type = "repetition"
+[[orchestrator.filters]]
+type = "zero_advantage"
+enforce = false
+
+[orchestrator.train.sampling]
+max_completion_tokens = 128
+temperature = 1.0
+
+[[orchestrator.train.env]]
+id = "interoception-countdown"
+name = "ctrl0-u1-40-long-additive-v2-l30-qwen3-4b-train"
+args = { problems_jsonl = "/root/data/train.jsonl", target_s_min = 1.0, target_s_max = 40.0, target_s_dist = "uniform", dataset_seed = 0, timing_source = "sim", hardware = "A100_80GB", sim_model = "Qwen3-4B", max_turns = 16, reward_shape = "additive", lambda_f = 0.30, attempt_bonus = 0.0, enforce_max_time = false, reward_time_term = true, prompt_variant = "remaining_budget" }
+
+[orchestrator.eval]
+interval = 50
+
+[orchestrator.eval.sampling]
+max_completion_tokens = 128
+temperature = 1.0
+
+[[orchestrator.eval.env]]
+id = "interoception-countdown"
+name = "ctrl0-u1-40-long-additive-v2-l30-eval-uniform"
+num_examples = 498
+rollouts_per_example = 1
+args = { problems_jsonl = "/root/data/eval.jsonl", target_s_min = 1.0, target_s_max = 40.0, target_s_dist = "uniform", dataset_seed = 777, timing_source = "sim", hardware = "A100_80GB", sim_model = "Qwen3-4B", max_turns = 16, reward_shape = "additive", lambda_f = 0.30, attempt_bonus = 0.0, enforce_max_time = false, reward_time_term = true, prompt_variant = "remaining_budget" }
+
+[inference]
+enable_fp32_lm_head = true

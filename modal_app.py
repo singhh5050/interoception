@@ -164,7 +164,7 @@ def _resume_arg_if_needed(cfg_path: str) -> list[str]:
     timeout=24 * 3600,
 )
 def train_run(toml_name: str, run_name: str, wandb_project: str = "interoception",
-              extra_args: list[str] | None = None) -> dict:
+              extra_args: list[str] | None = None, wandb_offline: bool = False) -> dict:
     """Run a prime-rl training job. prime-rl orchestrates vllm + trainer internally.
 
     Local logging mirror — everything wandb sees also lands on the
@@ -192,6 +192,22 @@ def train_run(toml_name: str, run_name: str, wandb_project: str = "interoception
     os.environ["HF_HOME"] = "/cache/hf"
     os.environ["WANDB_PROJECT"] = wandb_project
     os.environ["WANDB_NAME"] = run_name
+    # Set WANDB_RUN_ID deterministically from run_name. Two reasons:
+    # 1) Parallel sweeps under the same project (e.g. sweep_long_additive_v2)
+    #    otherwise collide if prime-rl derives run_id from a shared seed.
+    # 2) Re-running the same name (e.g. on preemption) resumes the same wandb
+    #    run instead of forking a new one.
+    import hashlib
+    os.environ["WANDB_RUN_ID"] = hashlib.md5(run_name.encode()).hexdigest()[:16]
+    # If we crashed/preempted and re-run with the same name, resume the wandb
+    # run rather than failing on "run already exists."
+    os.environ["WANDB_RESUME"] = "allow"
+    # For parallel sweeps: prime-rl passes id=None to wandb.init, so wandb
+    # generates IDs via random.choices() — which is seeded by the orchestrator's
+    # seed, so all parallel cells with the same seed collide on the same run ID.
+    # Offline mode bypasses the server entirely; can be `wandb sync`'d later.
+    if wandb_offline:
+        os.environ["WANDB_MODE"] = "offline"
     # wandb writes its full local archive under WANDB_DIR/wandb/run-*/. Pointing
     # this at the volume gives us a durable on-disk copy of everything wandb
     # streams, independent of the cloud upload.
@@ -727,3 +743,189 @@ def next_strict_conly_qwen3_4b():
     the c·f strict probe — NOT a batch-matched A/B; see config header).
     See configs/rl/ctrl0_u1_40_strict_conly_qwen3_4b.toml."""
     _launch_one("rl/ctrl0_u1_40_strict_conly_qwen3_4b.toml", "ctrl0-qwen3-4b-u1-40-strict-conly")
+
+
+@app.local_entrypoint()
+def eval_long_strict_probe(num_examples: int = 498):
+    """Probe T-conditioning of long-strict step_500 (the model trained with the
+    remaining_budget prompt). Runs 2 cells in parallel:
+      - long-strict + remaining_budget: matches training distribution. Primary
+        question — does the trained model preserve the base-model T-tracking
+        (r=+0.77) or did RL degrade it like the quiet-prompt training did (r=+0.15)?
+      - long-strict + base prompt:     OOD eval. Tests whether pacing generalizes
+        off the loud signal — i.e., whether the capability is in the weights or
+        only in the prompt-context attention.
+    Both write JSONLs to /cache/eval_rollouts/prompt_salience/long-strict_*.jsonl
+    so probe_prompt_salience.py can pull them alongside the existing 4 cells."""
+    long_strict_adapter = "/cache/runs/ctrl0_u1_40_long_strict_qwen3_4b/weights/step_500/lora_adapters"
+    jobs = []
+    for variant in ("base", "remaining_budget"):
+        jobs.append({"adapter_path": long_strict_adapter,
+                     "adapter_name": "long-strict",
+                     "run_label": "long-strict",
+                     "variants": (variant,)})
+    print(f"Launching {len(jobs)} long-strict probe cells in parallel")
+    calls = []
+    for j in jobs:
+        calls.append((j, eval_prompt_salience_run.spawn(num_examples=num_examples, **j)))
+    for j, c in calls:
+        try:
+            r = c.get()
+        except Exception as e:
+            r = {"ok": False, "error": str(e)[:200]}
+        label = f"{j['run_label']}/{j['variants'][0]}"
+        print(f"  {label:30s}: ok={r.get('ok')}  rc={r.get('returncode')}  "
+              f"dur={r.get('duration_s')}s  err={r.get('error', '')}")
+
+
+@app.local_entrypoint()
+def next_long_additive_qwen3_4b():
+    """100-step test of the ADDITIVE reward (c + λ_f · f). Hypothesis: gives RL
+    a gradient on pacing INDEPENDENT of correctness, preventing the fixed-commit-
+    time policy that c·f always converges to.
+    Uses prompt_variant=remaining_budget (loud), λ_f=0.5. ~1.5h, ~$10-15.
+    If T-tracking survives at step_100 (probe r > 0.3), extend to 500 steps.
+    See configs/rl/ctrl0_u1_40_long_additive_qwen3_4b.toml."""
+    _launch_one("rl/ctrl0_u1_40_long_additive_qwen3_4b.toml",
+                "ctrl0-qwen3-4b-u1-40-long-additive")
+
+
+@app.local_entrypoint()
+def eval_long_additive_probe(num_examples: int = 498):
+    """Probe T-conditioning of long-additive step_100 (the model trained with
+    additive reward c + 0.5·f). Runs 2 cells in parallel:
+      - long-additive + remaining_budget: matches training distribution. Primary
+        question — does the additive reward preserve the high f we saw in
+        training (f≈0.95) AND have it correspond to real T-tracking?
+      - long-additive + base prompt:     OOD eval. Tests whether the pacing
+        generalizes off the loud signal.
+    Both write JSONLs to /cache/eval_rollouts/prompt_salience/long-additive_*.jsonl
+    so probe_prompt_salience.py can pull them alongside the existing cells."""
+    long_additive_adapter = "/cache/runs/ctrl0_u1_40_long_additive_qwen3_4b/weights/step_100/lora_adapters"
+    jobs = []
+    for variant in ("base", "remaining_budget"):
+        jobs.append({"adapter_path": long_additive_adapter,
+                     "adapter_name": "long-additive",
+                     "run_label": "long-additive",
+                     "variants": (variant,)})
+    print(f"Launching {len(jobs)} long-additive probe cells in parallel")
+    calls = []
+    for j in jobs:
+        calls.append((j, eval_prompt_salience_run.spawn(num_examples=num_examples, **j)))
+    for j, c in calls:
+        try:
+            r = c.get()
+        except Exception as e:
+            r = {"ok": False, "error": str(e)[:200]}
+        label = f"{j['run_label']}/{j['variants'][0]}"
+        print(f"  {label:30s}: ok={r.get('ok')}  rc={r.get('returncode')}  "
+              f"dur={r.get('duration_s')}s  err={r.get('error', '')}")
+
+
+def _train_then_probe_v2(lam_tag: str):
+    """Train one v2 sweep cell and probe its step_200 checkpoint.
+    lam_tag in {"l10","l15","l30"} — matches the config + cell labels.
+    Each cell gets its own wandb project so prime-rl's deterministic run-id
+    derivation (which collides across parallel cells in the same project)
+    is scoped per cell — runs land in interoception-l10/l15/l30."""
+    cfg = f"rl/ctrl0_u1_40_long_additive_v2_{lam_tag}_qwen3_4b.toml"
+    wandb_name = f"ctrl0-qwen3-4b-u1-40-long-additive-v2-{lam_tag}"
+    wandb_project = f"interoception-{lam_tag}"
+    print(f"=== TRAIN: {lam_tag} (wandb: {wandb_project}/{wandb_name}, offline mode) ===")
+    r = train_run.remote(cfg, wandb_name, wandb_project=wandb_project, wandb_offline=True)
+    print(f"  train[{lam_tag}]: ok={r.get('ok')}  rc={r.get('returncode')}  dur={r.get('duration_s')}s")
+    if not r.get("ok"):
+        print(f"  TRAINING FAILED ({lam_tag}) — skipping probe. err={r.get('error', '')[:200]}")
+        return {"cell": lam_tag, "train_ok": False, "probe": None}
+
+    print(f"\n=== PROBE: {lam_tag} step_200 ===")
+    adapter = f"/cache/runs/ctrl0_u1_40_long_additive_v2_{lam_tag}_qwen3_4b/weights/step_200/lora_adapters"
+    label = f"long-additive-v2-{lam_tag}"
+    jobs = [{"adapter_path": adapter, "adapter_name": label,
+             "run_label": label, "variants": (v,)}
+            for v in ("base", "remaining_budget")]
+    calls = [(j, eval_prompt_salience_run.spawn(num_examples=498, **j)) for j in jobs]
+    probe_results = []
+    for j, c in calls:
+        try:
+            rr = c.get()
+        except Exception as e:
+            rr = {"ok": False, "error": str(e)[:200]}
+        var = j['variants'][0]
+        print(f"  probe[{lam_tag}/{var:18s}]: ok={rr.get('ok')}  dur={rr.get('duration_s')}s  err={rr.get('error', '')[:80]}")
+        probe_results.append({"variant": var, **rr})
+    return {"cell": lam_tag, "train_ok": True, "probe": probe_results}
+
+
+@app.local_entrypoint()
+def next_long_additive_v2_l15_qwen3_4b():
+    """Single-cell entrypoint: λ_f=0.15. Use sweep_long_additive_v2 for the full 3-cell sweep."""
+    _launch_one("rl/ctrl0_u1_40_long_additive_v2_l15_qwen3_4b.toml",
+                "ctrl0-qwen3-4b-u1-40-long-additive-v2-l15")
+
+
+@app.local_entrypoint()
+def next_long_additive_v2_l10_qwen3_4b():
+    """Single-cell entrypoint: λ_f=0.10."""
+    _launch_one("rl/ctrl0_u1_40_long_additive_v2_l10_qwen3_4b.toml",
+                "ctrl0-qwen3-4b-u1-40-long-additive-v2-l10")
+
+
+@app.local_entrypoint()
+def next_long_additive_v2_l30_qwen3_4b():
+    """Single-cell entrypoint: λ_f=0.30."""
+    _launch_one("rl/ctrl0_u1_40_long_additive_v2_l30_qwen3_4b.toml",
+                "ctrl0-qwen3-4b-u1-40-long-additive-v2-l30")
+
+
+@app.local_entrypoint()
+def eval_long_additive_v2_probe(lam_tag: str = "l15", num_examples: int = 498, step: int = 200):
+    """Standalone probe entrypoint: probes long-additive-v2-{lam_tag} (default l15) at the
+    given step (default 200). Runs 2 cells (base + remaining_budget). Use sweep_long_additive_v2
+    for the combined train+probe flow."""
+    adapter = f"/cache/runs/ctrl0_u1_40_long_additive_v2_{lam_tag}_qwen3_4b/weights/step_{step}/lora_adapters"
+    label = f"long-additive-v2-{lam_tag}"
+    jobs = [{"adapter_path": adapter, "adapter_name": label,
+             "run_label": label, "variants": (v,)}
+            for v in ("base", "remaining_budget")]
+    print(f"Launching 2 probe cells for {label} step_{step}")
+    calls = [(j, eval_prompt_salience_run.spawn(num_examples=num_examples, **j)) for j in jobs]
+    for j, c in calls:
+        try:
+            r = c.get()
+        except Exception as e:
+            r = {"ok": False, "error": str(e)[:200]}
+        var = j['variants'][0]
+        print(f"  {label}/{var:18s}: ok={r.get('ok')}  rc={r.get('returncode')}  "
+              f"dur={r.get('duration_s')}s  err={r.get('error', '')}")
+
+
+@app.local_entrypoint()
+def sweep_long_additive_v2():
+    """Fire-and-forget λ sweep: trains 3 cells in parallel (λ∈{0.10,0.15,0.30}),
+    each auto-probed at step_200. All otherwise share the v2 protocol
+    (200 steps, G=16/batch=128, additive reward, remaining_budget prompt).
+
+    Wallclock: if modal runs cells in parallel, ~7.5h total (~6h train + ~1.5h probe).
+    If modal serializes (as happened with the long-additive probe), expect ~22h total.
+    Per-cell cost ~$25 (~$75 for sweep)."""
+    import modal as _modal
+    lam_tags = ["l10", "l15", "l30"]
+    print(f"Launching {len(lam_tags)}-cell λ sweep: {lam_tags}")
+    # Spawn all cells in parallel via .spawn so they don't block on each other.
+    # Each cell is a local function call to _train_then_probe_v2 which itself
+    # uses .remote/.spawn for the underlying modal functions.
+    # We use Python threads to fan out the spawn calls (each blocks on .remote/.spawn).
+    import concurrent.futures as _f
+    with _f.ThreadPoolExecutor(max_workers=len(lam_tags)) as ex:
+        futures = {ex.submit(_train_then_probe_v2, lt): lt for lt in lam_tags}
+        results = {}
+        for fut in _f.as_completed(futures):
+            lt = futures[fut]
+            try:
+                results[lt] = fut.result()
+            except Exception as e:
+                results[lt] = {"cell": lt, "error": str(e)[:200]}
+    print("\n=== SWEEP COMPLETE ===")
+    for lt in lam_tags:
+        print(f"  {lt}: {results.get(lt)}")

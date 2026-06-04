@@ -65,9 +65,18 @@ class InteroceptionConfig(BaseModel):
     #   "hyperbolic"  : c · 1 if t≤T,   c · T/min(t,max_t) if t>T   (smooth gradient density past T)
     #   "exponential" : c · 1 if t≤T,   c · exp(-α·(t-T)/T) if t>T  (steeper penalty for overshoot)
     #   "asymmetric"  : old 4-bucket reward from rl_train.py (kept for fallback / comparison)
-    reward_shape: Literal["hyperbolic", "exponential", "asymmetric"] = "hyperbolic"
+    #   "additive"    : c + λ_f · f(t,T)   — gives RL a gradient on pacing INDEPENDENT
+    #     of correctness. Under c·f a wrong answer pays 0 regardless of pacing, so the
+    #     model can't learn "be on time even if uncertain" — RL converges to a fixed-
+    #     commit-time policy that ignores T. Additive keeps timing as a marginal reward
+    #     target even when c is high. λ_f ∈ ~[0.25, 1.0] is the useful range.
+    reward_shape: Literal["hyperbolic", "exponential", "asymmetric", "additive"] = "hyperbolic"
     # Exponential decay coefficient (only used when reward_shape="exponential").
     reward_alpha: float = 1.0
+    # Weight on the time term f(t,T) when reward_shape="additive". Reward becomes
+    # c + lambda_f · f(t,T). λ=0.5 is the recommended starting point (correctness
+    # still dominates but pacing is always present).
+    lambda_f: float = 0.5
     # Control flags for the f(t,T) ablations (Kanishk's 2026-05-24 controls thread):
     #   reward_time_term=False -> f(t,T)=1 always, so the reward collapses to pure
     #     correctness c (no timing term). Used by control A (no time reward) and
@@ -700,6 +709,16 @@ def load_environment(**kwargs) -> vf.Environment:
             (wrong_penalty, cfg.beta_wrong),
             (quit_penalty, cfg.beta_quit),
             (timeout_penalty, cfg.gamma),
+        ]
+    elif cfg.reward_shape == "additive":
+        # c + λ_f · f(t,T) — composed at the Rubric level out of two existing
+        # functions: is_correct (returns 1 iff correct, 0 else) and f_term
+        # (returns f regardless of correctness). The diagnostic_metrics list
+        # still includes both at weight=0, but the Rubric just sums weighted
+        # contributions, so total reward = 1·is_correct + λ_f·f_term + 0·… .
+        reward_funcs = [
+            (is_correct, 1.0),
+            (f_term, cfg.lambda_f),
         ]
     else:  # hyperbolic or exponential
         reward_funcs = [

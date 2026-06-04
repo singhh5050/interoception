@@ -1,0 +1,106 @@
+# ADDITIVE-REWARD probe (Kanishk-track, 2026-06-02): 100-step quick test.
+#
+# We've now shown that c·f reward (regardless of prompt format) destroys T-tracking
+# during RL: long-500 (quiet prompt) ended with r(commit_time, T) = -0.04, and
+# long-strict (loud prompt) ended with r = -0.05 — same fixed-commit-time policy.
+# The reward shape is the problem: under c·f, wrong answers pay 0 regardless of
+# pacing, so RL has no gradient on f when c is uncertain.
+#
+# Additive reward (c + λ_f · f) gives RL a gradient on pacing INDEPENDENT of
+# correctness — wrong-but-on-time pays λ_f instead of 0. Hypothesis: starting
+# from the base+loud-prompt model (which has r=+0.77 T-tracking), additive
+# reward should preserve T-tracking through training because pacing is always
+# part of the gradient.
+#
+# This run is a CHEAP 100-step test (~1.5h, ~$10-15) to see if the mechanism
+# works at all. If T-tracking survives at step_100 (r > 0.3), extend to 500.
+#
+# Differences from ctrl0_u1_40_long_strict_qwen3_4b.toml:
+#   max_steps       500 -> 100
+#   ckpt.interval   100 -> 50           (ckpts at step_50 + step_100)
+#   warmup_steps    10 -> 2             (proportional to the shorter run)
+#   decay_steps     10 -> 2
+#   reward_shape    "hyperbolic" -> "additive"  (env arg)
+#   lambda_f        (added)             0.5  (env arg, weight on f)
+#   output_dir + wandb name + env names updated to "-long-additive-"
+
+max_steps = 100
+seq_len = 2048
+output_dir = "/cache/runs/ctrl0_u1_40_long_additive_qwen3_4b"
+
+[ckpt]
+interval = 50
+
+[wandb]
+project = "interoception"
+entity = "singhh5050-stanford-university"
+name = "ctrl0-qwen3-4b-u1-40-long-additive"
+
+[model]
+name = "Qwen/Qwen3-4B-Instruct-2507"
+
+[trainer.model.lora]
+rank = 32
+alpha = 32.0
+dropout = 0.0
+target_modules = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+
+[trainer.ckpt.weights]
+save_adapter_separately = true
+
+[trainer.optim]
+type = "adamw"
+lr = 5e-5
+max_norm = 1.0
+betas1 = 0.9
+betas2 = 0.999
+weight_decay = 0.01
+
+[trainer.loss]
+type = "default"
+kl_tau = 1e-3
+
+[trainer.scheduler]
+type = "linear"
+warmup_steps = 2
+decay_steps = 2
+min_lr = 0.0
+
+[orchestrator]
+batch_size = 64
+rollouts_per_example = 8
+seed = 0
+
+[[orchestrator.filters]]
+type = "gibberish"
+[[orchestrator.filters]]
+type = "repetition"
+[[orchestrator.filters]]
+type = "zero_advantage"
+enforce = false
+
+[orchestrator.train.sampling]
+max_completion_tokens = 128
+temperature = 1.0
+
+[[orchestrator.train.env]]
+id = "interoception-countdown"
+name = "ctrl0-u1-40-long-additive-qwen3-4b-train"
+args = { problems_jsonl = "/root/data/train.jsonl", target_s_min = 1.0, target_s_max = 40.0, target_s_dist = "uniform", dataset_seed = 0, timing_source = "sim", hardware = "A100_80GB", sim_model = "Qwen3-4B", max_turns = 16, reward_shape = "additive", lambda_f = 0.5, attempt_bonus = 0.0, enforce_max_time = false, reward_time_term = true, prompt_variant = "remaining_budget" }
+
+[orchestrator.eval]
+interval = 50
+
+[orchestrator.eval.sampling]
+max_completion_tokens = 128
+temperature = 1.0
+
+[[orchestrator.eval.env]]
+id = "interoception-countdown"
+name = "ctrl0-u1-40-long-additive-eval-uniform"
+num_examples = 498
+rollouts_per_example = 1
+args = { problems_jsonl = "/root/data/eval.jsonl", target_s_min = 1.0, target_s_max = 40.0, target_s_dist = "uniform", dataset_seed = 777, timing_source = "sim", hardware = "A100_80GB", sim_model = "Qwen3-4B", max_turns = 16, reward_shape = "additive", lambda_f = 0.5, attempt_bonus = 0.0, enforce_max_time = false, reward_time_term = true, prompt_variant = "remaining_budget" }
+
+[inference]
+enable_fp32_lm_head = true
