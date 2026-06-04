@@ -27,3 +27,6 @@ analysis/logs/
 # Local Lambda dispatcher artifacts — LoRA adapters etc. fetched from Modal
 # to ship to a Lambda box. >100MB; regeneratable via scripts/run_prompt_salience.py.
 .lambda_artifacts/
+
+# Poster — local LaTeX source, figures, and large rendered outputs (PDF/JPG/PNG)
+poster/
