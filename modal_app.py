@@ -267,10 +267,11 @@ def _resume_arg_if_needed(cfg_path: str) -> list[str]:
     image=image,
     volumes={"/cache": volume},
     secrets=[wandb_secret],
-    # 24h is Modal's max (no unlimited option). Effectively no limit for our
-    # use case — 1000-step runs at ~30-40s/step take ~10h and we want plenty
-    # of buffer for slow steps + the post-training final eval.
-    timeout=24 * 3600,
+    # Backstop only — the real protection is the stall watchdog in train_run
+    # (kills a hung run in ~15 min). 10h comfortably covers a healthy 200-step
+    # run (~6-7h) while capping the bleed far below Modal's 24h max — a wedged
+    # FSDP collective once idled 6xA100 all the way to the old 24h limit.
+    timeout=10 * 3600,
 )
 def train_run(toml_name: str, run_name: str, wandb_project: str = "interoception",
               extra_args: list[str] | None = None, wandb_offline: bool = False) -> dict:
@@ -293,6 +294,7 @@ def train_run(toml_name: str, run_name: str, wandb_project: str = "interoception
     import os
     import subprocess
     import sys
+    import threading
     import time
 
     log_dir = f"/cache/run_logs/{run_name}"
@@ -344,12 +346,38 @@ def train_run(toml_name: str, run_name: str, wandb_project: str = "interoception
     # thread-safety questions about the Modal client).
     log_path = f"{log_dir}/stdout.log"
     last_commit = time.time()
+    # Stall watchdog: a healthy run prints constantly (rollout/eval progress bars,
+    # per-step SUCCESS lines), but a wedged trainer (e.g. a hung FSDP all-gather)
+    # goes totally silent while the orchestrator waits forever. If there's no stdout
+    # for STALL_LIMIT, kill the subprocess so a hang FAILS in minutes instead of
+    # idling to the function timeout. Normal gaps (a step, a 498-example eval) are
+    # <3 min, so 15 min of silence is unambiguously stuck. The thread only touches
+    # `proc` (a subprocess) — never the Modal client — so it's thread-safe.
+    STALL_LIMIT = 900
+    last_line_time = [time.time()]
+    killed_by_watchdog = [False]
+    stop_watchdog = threading.Event()
+
+    def _watchdog():
+        while not stop_watchdog.wait(60):
+            if time.time() - last_line_time[0] > STALL_LIMIT:
+                print(f"[watchdog] no output for {STALL_LIMIT}s — killing stalled run "
+                      f"(suspected trainer/collective hang)", flush=True)
+                killed_by_watchdog[0] = True
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+                return
+
     with open(log_path, "w", buffering=1) as logf:  # line-buffered
         proc = subprocess.Popen(
             cmd, cwd="/root/prime-rl", text=True,
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=1,
         )
+        threading.Thread(target=_watchdog, daemon=True).start()
         for line in proc.stdout:
+            last_line_time[0] = time.time()
             sys.stdout.write(line)
             sys.stdout.flush()
             logf.write(line)
@@ -360,14 +388,15 @@ def train_run(toml_name: str, run_name: str, wandb_project: str = "interoception
                     print(f"[volume.commit] warning: {e}", flush=True)
                 last_commit = time.time()
         proc.wait()
+        stop_watchdog.set()
     dur = time.time() - t0
-
     volume.commit()
     return {
-        "ok": proc.returncode == 0,
+        "ok": proc.returncode == 0 and not killed_by_watchdog[0],
         "returncode": proc.returncode,
         "duration_s": round(dur, 1),
         "log_dir": log_dir,
+        "stalled": killed_by_watchdog[0],
     }
 
 
@@ -1203,6 +1232,27 @@ def sweep_windowed():
         print(f"  {lt}: spawned (call={handle.object_id})  wandb={wandb_project}/{wandb_name}")
     print("\nAll trainings spawned. Local entrypoint exiting; modal app continues server-side.")
     print("Probes auto-fire when each cell hits step_200 — run watch_and_probe_windowed.")
+
+
+@app.local_entrypoint()
+def launch_windowed_su(cell: str = "su10"):
+    """Launch ONE σ_under-sweep cell, fire-and-forget (survives --detach):
+        modal run --detach modal_app.py::launch_windowed_su --cell su10
+    STAGED rollout: launch su10 first, confirm it trains past step ~3 (where the last
+    run wedged in an FSDP all-gather) and looks healthy, THEN launch su17. cell in
+    {su10, su17}; the σ_under=0.25 baseline is Nicole's windowed_l30 (fig 49).
+    train_run now has a 15-min stall watchdog, so a hang fails fast instead of idling."""
+    table = {
+        "su10": ("rl/ctrl0_u1_40_windowed_su10_qwen3_4b.toml",
+                 "ctrl0-qwen3-4b-u1-40-windowed-su10", "interoception-windowed-su10"),
+        "su17": ("rl/ctrl0_u1_40_windowed_su17_qwen3_4b.toml",
+                 "ctrl0-qwen3-4b-u1-40-windowed-su17", "interoception-windowed-su17"),
+    }
+    if cell not in table:
+        raise SystemExit(f"unknown cell {cell!r}; choose from {list(table)}")
+    cfg, name, proj = table[cell]
+    handle = train_run.spawn(cfg, name, wandb_project=proj)
+    print(f"spawned {name} (call={handle.object_id})  wandb={proj}/{name} — runs detached on Modal")
 
 
 @app.function(

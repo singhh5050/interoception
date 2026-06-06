@@ -1,0 +1,95 @@
+# WINDOWED σ_under sweep — cell σ_under=0.10 = SYMMETRIC (Harsh, 2026-06-06).
+#
+# Tests Kanishk/Nicole's window hypothesis along the one axis that matters: how
+# harshly to penalize finishing EARLY (σ_under). The existing windowed runs use
+# σ_under=0.25 (gentle under-penalty), and the model under-shoots T (commits early
+# to lock correctness). This cell sets σ_under=σ_over=0.10 — a SYMMETRIC Gaussian:
+# finishing early is punished as sharply as finishing late, so the model is forced
+# to commit near T. Read calibration (commit-time vs T) AND accuracy together — a
+# symmetric window may push commit→T but at the cost of punishing efficient early
+# commits (over-thinking risk).
+#
+# Identical to ctrl0_u1_40_windowed_l30 (λ=0.30, σ_over=0.10, max_turns=16, 100 steps,
+# G16/128, remaining_budget) EXCEPT sigma_under 0.25 -> 0.10. The σ_under=0.25 baseline
+# is Nicole's windowed_l30 (fig 49); σ_under=0.17 is the sibling cell.
+
+max_steps = 100
+seq_len = 2048
+output_dir = "/cache/runs/ctrl0_u1_40_windowed_su10_qwen3_4b"
+
+[ckpt]
+interval = 25
+
+[wandb]
+project = "interoception-windowed-su10"
+entity = "singhh5050-stanford-university"
+name = "ctrl0-qwen3-4b-u1-40-windowed-su10"
+
+[model]
+name = "Qwen/Qwen3-4B-Instruct-2507"
+
+[trainer.model.lora]
+rank = 32
+alpha = 32.0
+dropout = 0.0
+target_modules = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+
+[trainer.ckpt.weights]
+save_adapter_separately = true
+
+[trainer.optim]
+type = "adamw"
+lr = 5e-5
+max_norm = 1.0
+betas1 = 0.9
+betas2 = 0.999
+weight_decay = 0.01
+
+[trainer.loss]
+type = "default"
+kl_tau = 1e-3
+
+[trainer.scheduler]
+type = "linear"
+warmup_steps = 2
+decay_steps = 2
+min_lr = 0.0
+
+[orchestrator]
+batch_size = 128
+rollouts_per_example = 16
+seed = 0
+
+[[orchestrator.filters]]
+type = "gibberish"
+[[orchestrator.filters]]
+type = "repetition"
+[[orchestrator.filters]]
+type = "zero_advantage"
+enforce = false
+
+[orchestrator.train.sampling]
+max_completion_tokens = 128
+temperature = 1.0
+
+[[orchestrator.train.env]]
+id = "interoception-countdown"
+name = "ctrl0-u1-40-windowed-su10-qwen3-4b-train"
+args = { problems_jsonl = "/root/data/train.jsonl", target_s_min = 1.0, target_s_max = 40.0, target_s_dist = "uniform", dataset_seed = 0, timing_source = "sim", hardware = "A100_80GB", sim_model = "Qwen3-4B", max_turns = 16, reward_shape = "windowed_additive", lambda_f = 0.30, sigma_under = 0.10, sigma_over = 0.10, attempt_bonus = 0.0, enforce_max_time = false, reward_time_term = true, prompt_variant = "remaining_budget" }
+
+[orchestrator.eval]
+interval = 50
+
+[orchestrator.eval.sampling]
+max_completion_tokens = 128
+temperature = 1.0
+
+[[orchestrator.eval.env]]
+id = "interoception-countdown"
+name = "ctrl0-u1-40-windowed-su10-eval-uniform"
+num_examples = 498
+rollouts_per_example = 1
+args = { problems_jsonl = "/root/data/eval.jsonl", target_s_min = 1.0, target_s_max = 40.0, target_s_dist = "uniform", dataset_seed = 777, timing_source = "sim", hardware = "A100_80GB", sim_model = "Qwen3-4B", max_turns = 16, reward_shape = "windowed_additive", lambda_f = 0.30, sigma_under = 0.10, sigma_over = 0.10, attempt_bonus = 0.0, enforce_max_time = false, reward_time_term = true, prompt_variant = "remaining_budget" }
+
+[inference]
+enable_fp32_lm_head = true
