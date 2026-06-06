@@ -23,6 +23,12 @@ CELLS = [
     ("long-strict / remaining_budget",  "long-strict_remaining_budget.jsonl","#8e44ad"),
     ("long-additive / base prompt",         "long-additive_base.jsonl",             "#006D77"),
     ("long-additive / remaining_budget",    "long-additive_remaining_budget.jsonl", "#E63946"),
+    ("v2-λ=0.10 / base prompt",             "long-additive-v2-l10_base.jsonl",             "#B0BEC5"),
+    ("v2-λ=0.10 / remaining_budget",        "long-additive-v2-l10_remaining_budget.jsonl", "#1976D2"),
+    ("v2-λ=0.15 / base prompt",             "long-additive-v2-l15_base.jsonl",             "#A5D6A7"),
+    ("v2-λ=0.15 / remaining_budget",        "long-additive-v2-l15_remaining_budget.jsonl", "#2E7D32"),
+    ("v2-λ=0.30 / base prompt",             "long-additive-v2-l30_base.jsonl",             "#FFAB91"),
+    ("v2-λ=0.30 / remaining_budget",        "long-additive-v2-l30_remaining_budget.jsonl", "#BF360C"),
 ]
 BINS = [(1, 9), (9, 17), (17, 25), (25, 33), (33, 40.001)]
 

@@ -91,6 +91,115 @@ image = (
 app = modal.App(APP_NAME)
 
 
+@app.function(
+    image=image,
+    gpu="A100-80GB:1",
+    volumes={"/cache": volume},
+    timeout=1800,
+)
+def merge_lora_into_base(
+    base_model: str = "Qwen/Qwen3-4B-Instruct-2507",
+    lora_path: str = "/cache/runs/ctrl0_u1_40_long_additive_v2_l30_qwen3_4b/weights/step_200/lora_adapters",
+    out_path: str = "/cache/merged_models/qwen3-4b-v2-l30-step200",
+) -> dict:
+    """Merge a LoRA adapter into a base model, save merged HF checkpoint.
+    Used for the 2-stage curriculum: the merged model becomes the 'new base'
+    for stage 2, so prime-rl's kl_tau regularization (which anchors against
+    the base) automatically anchors against the stage-1 policy."""
+    import os, subprocess
+    # Values pass via env vars to avoid quote-escaping in the inline script.
+    script = """
+import os
+os.environ['HF_HOME'] = '/cache/hf'
+import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer
+from peft import PeftModel
+
+BASE = os.environ['MERGE_BASE']
+LORA = os.environ['MERGE_LORA']
+OUT = os.environ['MERGE_OUT']
+
+print(f'loading base model: {BASE}', flush=True)
+model = AutoModelForCausalLM.from_pretrained(BASE, torch_dtype=torch.bfloat16)
+n_params_base = sum(p.numel() for p in model.parameters())
+print(f'  base params: {n_params_base/1e9:.2f}B  dtype: {next(model.parameters()).dtype}', flush=True)
+tok = AutoTokenizer.from_pretrained(BASE)
+
+print(f'loading LoRA from: {LORA}', flush=True)
+model = PeftModel.from_pretrained(model, LORA)
+
+print('merging...', flush=True)
+model = model.merge_and_unload()
+n_params_merged = sum(p.numel() for p in model.parameters())
+print(f'  merged params: {n_params_merged/1e9:.2f}B  dtype: {next(model.parameters()).dtype}', flush=True)
+
+os.makedirs(OUT, exist_ok=True)
+print(f'saving merged model to: {OUT}', flush=True)
+# Force sharded safetensors save with a small shard size so we get multiple files
+# if the model is large. max_shard_size=5GB is HF default; we use 2GB to be safe.
+model.save_pretrained(OUT, safe_serialization=True, max_shard_size='2GB')
+tok.save_pretrained(OUT)
+
+print('--- listing OUT contents ---', flush=True)
+for entry in sorted(os.listdir(OUT)):
+    sz = os.path.getsize(os.path.join(OUT, entry))
+    print(f'  {entry}  ({sz/1e6:.1f} MB)', flush=True)
+print('done', flush=True)
+"""
+    env = {**os.environ, "MERGE_BASE": base_model, "MERGE_LORA": lora_path, "MERGE_OUT": out_path}
+    # Ensure peft is available (prime-rl env may not include it).
+    subprocess.run(
+        ["/root/.local/bin/uv", "pip", "install", "peft"],
+        capture_output=True, text=True, cwd="/root/prime-rl",
+    )
+    r = subprocess.run(
+        ["/root/.local/bin/uv", "run", "python", "-c", script],
+        capture_output=True, text=True, cwd="/root/prime-rl", env=env,
+    )
+    return {"rc": r.returncode, "stdout": (r.stdout or "")[-2000:],
+            "stderr": (r.stderr or "")[-2000:]}
+
+
+@app.local_entrypoint()
+def merge_v2_l30_lora():
+    """Merge v2-l30 step_200 LoRA into Qwen3-4B base. One-time setup for stage 2."""
+    r = merge_lora_into_base.remote()
+    print(f"rc={r['rc']}")
+    print("--- stdout ---")
+    print(r['stdout'])
+    if r['rc']:
+        print("--- stderr ---")
+        print(r['stderr'])
+
+
+@app.function(image=image, volumes={"/cache": volume}, secrets=[wandb_secret], timeout=1800)
+def wandb_sync_offline(run_name_prefix: str = "ctrl0_u1_40_long_additive_v2"):
+    """Sync all offline wandb runs matching <run_name_prefix>* to wandb cloud.
+    Local wandb/protobuf versions can mismatch; inside this container they match
+    what prime-rl used to write the offline data, so `wandb sync` works."""
+    import os, subprocess
+    runs_dir = "/cache/runs"
+    synced = []
+    for entry in sorted(os.listdir(runs_dir)):
+        if not entry.startswith(run_name_prefix):
+            continue
+        wd = f"{runs_dir}/{entry}/run_default/wandb"
+        if not os.path.isdir(wd):
+            print(f"  skip {entry}: no run_default/wandb dir")
+            continue
+        for sub in sorted(os.listdir(wd)):
+            if not sub.startswith("offline-run-"):
+                continue
+            path = f"{wd}/{sub}"
+            print(f"=== syncing {entry} / {sub} ===")
+            r = subprocess.run(["/root/.local/bin/uv", "run", "wandb", "sync", path],
+                               capture_output=True, text=True, cwd="/root/prime-rl")
+            tail = (r.stdout or "")[-800:] + (r.stderr or "")[-800:]
+            print(tail)
+            synced.append({"cell": entry, "segment": sub, "rc": r.returncode})
+    return synced
+
+
 @app.function(image=image, timeout=600)  # CPU only — hwprop is an analytical sim
 def chunk_latency_calc() -> str:
     """Compute per-chunk simulated latency via hwprop across hardware x model configs.
@@ -968,6 +1077,216 @@ def eval_long_additive_v2_probe(lam_tag: str = "l15", num_examples: int = 498, s
         var = j['variants'][0]
         print(f"  {label}/{var:18s}: ok={r.get('ok')}  rc={r.get('returncode')}  "
               f"dur={r.get('duration_s')}s  err={r.get('error', '')}")
+
+
+@app.local_entrypoint()
+def sync_v2_wandb():
+    """Sync long_additive_v2_* offline wandb runs to cloud. Useful after a sweep
+    with WANDB_MODE=offline so we can use wandb.Api() to plot."""
+    results = wandb_sync_offline.remote("ctrl0_u1_40_long_additive_v2")
+    print("\n=== sync results ===")
+    for r in results:
+        print(f"  {r['cell']:55s} / {r['segment']}: rc={r['rc']}")
+
+
+@app.local_entrypoint()
+def sync_stage2_wandb():
+    """Sync stage2_kl_* offline wandb runs to cloud."""
+    results = wandb_sync_offline.remote("stage2_kl")
+    print("\n=== sync results ===")
+    for r in results:
+        print(f"  {r['cell']:55s} / {r['segment']}: rc={r['rc']}")
+
+
+@app.local_entrypoint()
+def sweep_stage2_kl():
+    """Fire-and-forget β sweep for 2-stage KL-anchored curriculum. 5 cells:
+    kl_tau ∈ {0, 1e-4, 1e-3, 1e-2, 1e-1}. All start from the v2-l30-merged
+    base model, train with c-only reward, ckpt every 25 steps.
+    PREREQUISITE: merge_v2_l30_lora must have run first.
+
+    Uses .spawn() (not .remote()) so the local entrypoint returns immediately
+    and the modal app runs server-side. Probes need to be fired manually
+    after each cell's step_200 weights land — use eval_stage2_probe for that.
+
+    Wallclock: ~3-4h per cell if parallel, ~$25 per cell (~$125 total)."""
+    beta_tags = ["b0", "b4", "b3", "b2", "b1"]
+    print(f"Spawning {len(beta_tags)}-cell stage-2 β sweep (training only): {beta_tags}")
+    for bt in beta_tags:
+        cfg = f"rl/stage2_kl_{bt}_qwen3_4b.toml"
+        wandb_name = f"stage2-kl-{bt}"
+        wandb_project = f"interoception-stage2-{bt}"
+        handle = train_run.spawn(cfg, wandb_name,
+                                 wandb_project=wandb_project, wandb_offline=True)
+        print(f"  {bt}: spawned (call={handle.object_id})  wandb={wandb_project}/{wandb_name}")
+    print("\nAll trainings spawned. Local entrypoint exiting; modal app continues server-side.")
+    print("After step_200 weights land for a cell, probe via:")
+    print("  modal run modal_app.py::eval_stage2_probe --beta-tag <b0|b4|b3|b2|b1>")
+
+
+@app.local_entrypoint()
+def eval_stage2_probe(beta_tag: str = "b3", num_examples: int = 498, step: int = 200):
+    """Probe a single stage-2 cell's checkpoint (default step_200).
+    Spawns both prompt variants (base + remaining_budget) in parallel."""
+    adapter = f"/cache/runs/stage2_kl_{beta_tag}_qwen3_4b/weights/step_{step}/lora_adapters"
+    label = f"stage2-kl-{beta_tag}"
+    jobs = [{"adapter_path": adapter, "adapter_name": label,
+             "run_label": label, "variants": (v,)}
+            for v in ("base", "remaining_budget")]
+    print(f"Launching 2 probe cells for {label} step_{step}")
+    calls = [(j, eval_prompt_salience_run.spawn(num_examples=num_examples, **j)) for j in jobs]
+    for j, c in calls:
+        try:
+            r = c.get()
+        except Exception as e:
+            r = {"ok": False, "error": str(e)[:200]}
+        var = j['variants'][0]
+        print(f"  {label}/{var:18s}: ok={r.get('ok')}  rc={r.get('returncode')}  "
+              f"dur={r.get('duration_s')}s  err={r.get('error', '')}")
+
+
+@app.function(
+    image=image,
+    volumes={"/cache": volume},
+    timeout=24 * 3600,
+)
+def auto_probe_stage2_when_ready():
+    """Poll the volume every 5 min for stage-2 cells with step_200 weights;
+    spawn probes (base + remaining_budget) as soon as each cell completes.
+    Runs server-side. Returns when all 5 cells have been probed.
+
+    Idempotent at the cell level — once we've spawned probes for a cell,
+    we don't re-spawn even if the function restarts."""
+    import os, time
+    beta_tags = ["b0", "b4", "b3", "b2", "b1"]
+    probed = set()
+    iter_no = 0
+    while len(probed) < len(beta_tags):
+        iter_no += 1
+        volume.reload()
+        for bt in beta_tags:
+            if bt in probed:
+                continue
+            adapter = f"/cache/runs/stage2_kl_{bt}_qwen3_4b/weights/step_200/lora_adapters"
+            if os.path.exists(adapter):
+                label = f"stage2-kl-{bt}"
+                print(f"[iter {iter_no}] {bt} ready — spawning 2 probes", flush=True)
+                for v in ("base", "remaining_budget"):
+                    eval_prompt_salience_run.spawn(
+                        adapter_path=adapter, adapter_name=label, run_label=label,
+                        variants=(v,), num_examples=498,
+                    )
+                probed.add(bt)
+        if len(probed) < len(beta_tags):
+            remaining = sorted(set(beta_tags) - probed)
+            print(f"[iter {iter_no}] {len(probed)}/{len(beta_tags)} probed; waiting on {remaining}", flush=True)
+            time.sleep(300)
+    print(f"all {len(beta_tags)} cells probed (probes spawned). watcher exiting.", flush=True)
+    return list(probed)
+
+
+@app.local_entrypoint()
+def sweep_windowed():
+    """Fire-and-forget λ sweep with windowed_additive reward (asymmetric Gaussian
+    f peaked at t=T). 3 cells: λ ∈ {0.15, 0.30, 0.50}, σ_under=0.25, σ_over=0.10.
+    Same protocol as v2 (200 steps, G=16/batch=128, +remaining_budget prompt) —
+    only the reward shape changes. Tests whether the bimodal regime under flat-1
+    additive disappears with a peaked f-shape (Kanishk's hypothesis)."""
+    lam_tags = ["l15", "l30", "l50"]
+    print(f"Spawning {len(lam_tags)}-cell windowed-reward λ sweep: {lam_tags}")
+    for lt in lam_tags:
+        cfg = f"rl/ctrl0_u1_40_windowed_{lt}_qwen3_4b.toml"
+        wandb_name = f"ctrl0-qwen3-4b-u1-40-windowed-{lt}"
+        wandb_project = f"interoception-windowed-{lt}"
+        handle = train_run.spawn(cfg, wandb_name,
+                                 wandb_project=wandb_project, wandb_offline=True)
+        print(f"  {lt}: spawned (call={handle.object_id})  wandb={wandb_project}/{wandb_name}")
+    print("\nAll trainings spawned. Local entrypoint exiting; modal app continues server-side.")
+    print("Probes auto-fire when each cell hits step_200 — run watch_and_probe_windowed.")
+
+
+@app.function(
+    image=image,
+    volumes={"/cache": volume},
+    timeout=24 * 3600,
+)
+def auto_probe_windowed_when_ready(num_examples: int = 200):
+    """Poll every 5 min for windowed-sweep cells with step_200 weights; spawn
+    probes as each cell completes.
+
+    Default num_examples=200 (down from 498) for exploratory iteration speed:
+    n=200 gives r std error ≈ 0.07 (good enough to distinguish r=0.5 vs r=0.8)
+    and probe wallclock drops from ~70-90 min to ~30 min."""
+    import os, time
+    lam_tags = ["l15", "l30", "l50"]
+    probed = set()
+    iter_no = 0
+    while len(probed) < len(lam_tags):
+        iter_no += 1
+        volume.reload()
+        for lt in lam_tags:
+            if lt in probed:
+                continue
+            adapter = f"/cache/runs/ctrl0_u1_40_windowed_{lt}_qwen3_4b/weights/step_100/lora_adapters"
+            if os.path.exists(adapter):
+                label = f"windowed-{lt}"
+                print(f"[iter {iter_no}] {lt} ready — spawning 2 probes (n={num_examples})", flush=True)
+                for v in ("base", "remaining_budget"):
+                    eval_prompt_salience_run.spawn(
+                        adapter_path=adapter, adapter_name=label, run_label=label,
+                        variants=(v,), num_examples=num_examples,
+                    )
+                probed.add(lt)
+        if len(probed) < len(lam_tags):
+            remaining = sorted(set(lam_tags) - probed)
+            print(f"[iter {iter_no}] {len(probed)}/{len(lam_tags)} probed; waiting on {remaining}", flush=True)
+            time.sleep(300)
+    print(f"all {len(lam_tags)} cells probed. watcher exiting.", flush=True)
+    return list(probed)
+
+
+@app.local_entrypoint()
+def watch_and_probe_windowed():
+    """Spawn the windowed-sweep auto-probe watcher server-side."""
+    handle = auto_probe_windowed_when_ready.spawn()
+    print(f"spawned auto-probe watcher (call={handle.object_id})")
+    print("watcher will run server-side; safe to close terminal.")
+
+
+@app.local_entrypoint()
+def watch_and_probe_stage2():
+    """Spawn the auto-probe watcher server-side. Runs for up to 24h, polling
+    every 5 min and firing probes as each cell's step_200 weights appear."""
+    handle = auto_probe_stage2_when_ready.spawn()
+    print(f"spawned auto-probe watcher (call={handle.object_id})")
+    print("watcher will run server-side; safe to close terminal.")
+
+
+@app.local_entrypoint()
+def probe_stage2_all_ready():
+    """Scan for stage-2 cells with step_200 weights, fire probes for each.
+    Idempotent — won't re-probe cells that already have JSONLs on the volume."""
+    import modal as _modal
+    vol = _modal.Volume.from_name("interoception-cache")
+    # Heuristic: list output dirs, check weights/step_200 existence
+    beta_tags = ["b0", "b4", "b3", "b2", "b1"]
+    for bt in beta_tags:
+        weights = f"/cache/runs/stage2_kl_{bt}_qwen3_4b/weights/step_200/lora_adapters"
+        jsonl_base = f"/cache/eval_rollouts/prompt_salience/stage2-kl-{bt}_base.jsonl"
+        jsonl_rb = f"/cache/eval_rollouts/prompt_salience/stage2-kl-{bt}_remaining_budget.jsonl"
+        # We can't directly check files via vol.listdir from a local entrypoint.
+        # Instead just try to probe — eval_prompt_salience_run will fail-fast if
+        # the adapter path doesn't exist.
+        print(f"=== {bt}: probing (will fail if step_200 not ready) ===")
+        for variant in ("base", "remaining_budget"):
+            handle = eval_prompt_salience_run.spawn(
+                adapter_path=weights,
+                adapter_name=f"stage2-kl-{bt}",
+                run_label=f"stage2-kl-{bt}",
+                variants=(variant,),
+                num_examples=498,
+            )
+            print(f"  {bt}/{variant}: spawned (call={handle.object_id})")
 
 
 @app.local_entrypoint()

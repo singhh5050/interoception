@@ -1,0 +1,94 @@
+# WINDOWED-REWARD sweep / cell λ=0.50 (Kanishk-hypothesis test, 2026-06-05).
+#
+# Tests whether the bimodal λ regime under additive reward is shape-induced.
+# Hypothesis: flat-1 ceiling (f=1 for any t≤T) gives the optimizer no incentive
+# to actually use the budget, so it converges to "commit at fraction of T".
+# Asymmetric Gaussian peaked at t=T fixes this — model can't get f=1 by under-
+# spending. Should produce a smooth (c,r) tradeoff across λ instead of bimodal.
+#
+# Sigma asymmetry: under-shoot is gentle (σ=0.25·T), over-shoot sharp (σ=0.10·T).
+# Reflects "miss the deadline > finish early" reality.
+#
+# Protocol mirrors v2 sweep (200 steps, G=16/batch=128, +remaining_budget prompt)
+# except reward_shape="windowed_additive" instead of "additive".
+
+max_steps = 100
+seq_len = 2048
+output_dir = "/cache/runs/ctrl0_u1_40_windowed_l50_qwen3_4b"
+
+[ckpt]
+interval = 25
+
+[wandb]
+project = "interoception-windowed-l50"
+entity = "nicolema-stanford-university"
+name = "ctrl0-qwen3-4b-u1-40-windowed-l50"
+
+[model]
+name = "Qwen/Qwen3-4B-Instruct-2507"
+
+[trainer.model.lora]
+rank = 32
+alpha = 32.0
+dropout = 0.0
+target_modules = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+
+[trainer.ckpt.weights]
+save_adapter_separately = true
+
+[trainer.optim]
+type = "adamw"
+lr = 5e-5
+max_norm = 1.0
+betas1 = 0.9
+betas2 = 0.999
+weight_decay = 0.01
+
+[trainer.loss]
+type = "default"
+kl_tau = 1e-3
+
+[trainer.scheduler]
+type = "linear"
+warmup_steps = 2
+decay_steps = 2
+min_lr = 0.0
+
+[orchestrator]
+batch_size = 128
+rollouts_per_example = 16
+seed = 0
+
+[[orchestrator.filters]]
+type = "gibberish"
+[[orchestrator.filters]]
+type = "repetition"
+[[orchestrator.filters]]
+type = "zero_advantage"
+enforce = false
+
+[orchestrator.train.sampling]
+max_completion_tokens = 128
+temperature = 1.0
+
+[[orchestrator.train.env]]
+id = "interoception-countdown"
+name = "ctrl0-u1-40-windowed-l50-qwen3-4b-train"
+args = { problems_jsonl = "/root/data/train.jsonl", target_s_min = 1.0, target_s_max = 40.0, target_s_dist = "uniform", dataset_seed = 0, timing_source = "sim", hardware = "A100_80GB", sim_model = "Qwen3-4B", max_turns = 16, reward_shape = "windowed_additive", lambda_f = 0.50, sigma_under = 0.25, sigma_over = 0.10, attempt_bonus = 0.0, enforce_max_time = false, reward_time_term = true, prompt_variant = "remaining_budget" }
+
+[orchestrator.eval]
+interval = 50
+
+[orchestrator.eval.sampling]
+max_completion_tokens = 128
+temperature = 1.0
+
+[[orchestrator.eval.env]]
+id = "interoception-countdown"
+name = "ctrl0-u1-40-windowed-l50-eval-uniform"
+num_examples = 498
+rollouts_per_example = 1
+args = { problems_jsonl = "/root/data/eval.jsonl", target_s_min = 1.0, target_s_max = 40.0, target_s_dist = "uniform", dataset_seed = 777, timing_source = "sim", hardware = "A100_80GB", sim_model = "Qwen3-4B", max_turns = 16, reward_shape = "windowed_additive", lambda_f = 0.50, sigma_under = 0.25, sigma_over = 0.10, attempt_bonus = 0.0, enforce_max_time = false, reward_time_term = true, prompt_variant = "remaining_budget" }
+
+[inference]
+enable_fp32_lm_head = true
