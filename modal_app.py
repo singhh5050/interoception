@@ -842,33 +842,22 @@ def sweep_voc_rewards():
       clip-norho : c − 0.1·min(t/T,5)           (clip, NO ρ_q — the difficulty ablation)
     Reads from 3 runs: shape (clip-rho vs overbudget) and ρ_q (clip-rho vs clip-norho).
     Watch reward / is_correct / f_term / pass_rate / elapsed_over_target FIRST, then run the
-    decoupled calibration probe on the step_25..100 ckpts (with max_turns=12)."""
-    import concurrent.futures as _f
+    decoupled calibration probe on the step_25..100 ckpts (with max_turns=12).
+
+    FIRE-AND-FORGET: spawns the 3 cells on Modal and returns immediately, so there is no
+    hours-long local process to kill. Launch with `modal run --detach` so the spawned cells
+    persist after the client disconnects. Monitor on wandb / the cache volume — there is
+    nothing to wait on locally."""
     cells = [
         ("rl/ctrl0_u1_40_voc_clip_rho_qwen3_4b.toml",   "ctrl0-qwen3-4b-u1-40-voc-clip-rho",   "interoception-voc-cliprho"),
         ("rl/ctrl0_u1_40_voc_overbudget_qwen3_4b.toml", "ctrl0-qwen3-4b-u1-40-voc-overbudget", "interoception-voc-ob"),
         ("rl/ctrl0_u1_40_voc_clip_norho_qwen3_4b.toml", "ctrl0-qwen3-4b-u1-40-voc-clip-norho", "interoception-voc-clipnorho"),
     ]
-    print(f"Launching {len(cells)}-cell VoC reward-space screen (100 steps each, parallel)")
-
-    def _launch(cfg, name, proj):
-        try:
-            r = train_run.remote(cfg, name, wandb_project=proj)
-        except Exception as e:
-            r = {"ok": False, "error": str(e)[:200]}
-        return name, r
-
-    with _f.ThreadPoolExecutor(max_workers=len(cells)) as ex:
-        futs = [ex.submit(_launch, *c) for c in cells]
-        results = {}
-        for fut in _f.as_completed(futs):
-            name, r = fut.result()
-            results[name] = r
-            print(f"  {name}: ok={r.get('ok')}  rc={r.get('returncode')}  "
-                  f"dur={r.get('duration_s')}s  err={r.get('error', '')}")
-    print("\n=== SCREEN COMPLETE ===")
-    for _, name, _proj in cells:
-        print(f"  {name}: {results.get(name)}")
+    print(f"Spawning {len(cells)} VoC screen cells (fire-and-forget; launch with --detach)")
+    for cfg, name, proj in cells:
+        call = train_run.spawn(cfg, name, wandb_project=proj)
+        print(f"  spawned {name}  (wandb={proj})  call_id={call.object_id}")
+    print("All cells spawned — they run on Modal independently. Monitor on wandb.")
 
 
 @app.local_entrypoint()
