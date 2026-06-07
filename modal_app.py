@@ -1247,12 +1247,38 @@ def launch_windowed_su(cell: str = "su10"):
                  "ctrl0-qwen3-4b-u1-40-windowed-su10", "interoception-windowed-su10"),
         "su17": ("rl/ctrl0_u1_40_windowed_su17_qwen3_4b.toml",
                  "ctrl0-qwen3-4b-u1-40-windowed-su17", "interoception-windowed-su17"),
+        # 200-step ALL-FRESH σ_under sweep (su25/su17/su10, identical schedule, λ=0.30).
+        "su25_200": ("rl/ctrl0_u1_40_windowed_su25_200_qwen3_4b.toml",
+                     "ctrl0-qwen3-4b-u1-40-windowed-su25-200", "interoception-windowed-su25-200"),
+        "su17_200": ("rl/ctrl0_u1_40_windowed_su17_200_qwen3_4b.toml",
+                     "ctrl0-qwen3-4b-u1-40-windowed-su17-200", "interoception-windowed-su17-200"),
+        "su10_200": ("rl/ctrl0_u1_40_windowed_su10_200_qwen3_4b.toml",
+                     "ctrl0-qwen3-4b-u1-40-windowed-su10-200", "interoception-windowed-su10-200"),
     }
     if cell not in table:
         raise SystemExit(f"unknown cell {cell!r}; choose from {list(table)}")
     cfg, name, proj = table[cell]
     handle = train_run.spawn(cfg, name, wandb_project=proj)
     print(f"spawned {name} (call={handle.object_id})  wandb={proj}/{name} — runs detached on Modal")
+
+
+@app.local_entrypoint()
+def probe_windowed_su(num_examples: int = 498):
+    """Calibration probe (commit-time vs T, matched/remaining_budget prompt) on the
+    σ_under sweep step_100 adapters: su10 (σ_under=0.10) and su17 (σ_under=0.17). Writes
+    /cache/eval_rollouts/prompt_salience/windowed-su{10,17}_remaining_budget.jsonl. Overlay
+    vs su25 = windowed_l30 (existing windowed-l30_remaining_budget.jsonl in the repo). One
+    A100 per cell, ~15-20 min, fire-and-forget (launch with --detach)."""
+    cells = [
+        ("/cache/runs/ctrl0_u1_40_windowed_su10_qwen3_4b/weights/step_100/lora_adapters", "windowed-su10"),
+        ("/cache/runs/ctrl0_u1_40_windowed_su17_qwen3_4b/weights/step_100/lora_adapters", "windowed-su17"),
+    ]
+    for adapter, label in cells:
+        call = eval_prompt_salience_run.spawn(
+            adapter_path=adapter, adapter_name=label, run_label=label,
+            variants=("remaining_budget",), num_examples=num_examples)
+        print(f"spawned probe {label} (call={call.object_id})  n={num_examples}")
+    print("Probes spawned. JSONLs land in /cache/eval_rollouts/prompt_salience/ when done.")
 
 
 @app.function(
