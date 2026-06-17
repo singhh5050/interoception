@@ -86,6 +86,9 @@ image = (
     # The prompt-salience eval script is invoked directly in `eval_prompt_salience`.
     .add_local_file("scripts/eval_prompt_salience.py",
                     remote_path="/root/scripts/eval_prompt_salience.py")
+    # Batched accuracy-vs-budget sweep (within-problem), invoked in `acc_vs_budget`.
+    .add_local_file("scripts/dev/eval_acc_vs_budget.py",
+                    remote_path="/root/scripts/eval_acc_vs_budget.py")
 )
 
 app = modal.App(APP_NAME)
@@ -713,6 +716,74 @@ def eval_strict_conly():
 
 
 # ---------------------------------------------------------------------------
+# Accuracy-vs-budget sweep (within-problem): each model evaluated on the same
+# test problems at a grid of FIXED budgets T. Batched rollouts -> fast/cheap.
+# ---------------------------------------------------------------------------
+
+@app.function(gpu="A100-80GB:1", image=image, volumes={"/cache": volume}, timeout=3600)
+def acc_vs_budget_run(base_model: str, adapter_path: str | None, adapter_name: str,
+                      run_label: str, budgets: str, num_examples: int,
+                      variant: str = "remaining_budget") -> dict:
+    import json as _json, os, subprocess, time
+    out_json = f"/cache/eval_rollouts/acc_vs_budget/{run_label}_{variant}.json"
+    os.makedirs(os.path.dirname(out_json), exist_ok=True)
+    cmd = ["/root/.local/bin/uv", "run", "python", "/root/scripts/eval_acc_vs_budget.py",
+           "--base-model", base_model, "--run-label", run_label, "--variant", variant,
+           "--budgets", budgets, "--num-examples", str(num_examples),
+           "--problems-jsonl", "/root/data/eval.jsonl", "--output-json", out_json]
+    if adapter_path:
+        cmd += ["--adapter-path", adapter_path, "--adapter-name", adapter_name]
+    print(f"[acc-vs-budget] {run_label}: {' '.join(cmd)}", flush=True)
+    t0 = time.time()
+    proc = subprocess.run(cmd, cwd="/root/prime-rl", text=True, capture_output=True)
+    print(proc.stdout[-4000:]); print(proc.stderr[-2000:])
+    volume.commit()
+    summary = None
+    for line in proc.stdout.splitlines():
+        if line.startswith("RESULT_JSON "):
+            summary = _json.loads(line[len("RESULT_JSON "):])
+    return {"ok": proc.returncode == 0, "label": run_label,
+            "duration_s": round(time.time() - t0, 1), "result": summary}
+
+
+@app.local_entrypoint()
+def acc_vs_budget(num_examples: int = 128, budgets: str = "4,8,12,18,24,32,40",
+                  variant: str = "remaining_budget", models: str = ""):
+    """Test-set accuracy vs. budget, within-problem. Spawns one job per model,
+    each looping the budget grid. Results land at
+    /cache/eval_rollouts/acc_vs_budget/<label>_<variant>.json. Pass --models as a
+    comma-separated list of run-labels to run a subset (default: all)."""
+    conly = "/cache/runs/ctrl0_u1_40_strict_conly_qwen3_4b/weights/step_500/lora_adapters"
+    def su(s):
+        return f"/cache/runs/ctrl0_u1_40_windowed_{s}_200_qwen3_4b/weights/step_200/lora_adapters"
+    cells = [
+        {"adapter_path": None, "adapter_name": "base", "run_label": "base"},
+        {"adapter_path": conly, "adapter_name": "strict-conly", "run_label": "correctness-only"},
+        {"adapter_path": su("su25"), "adapter_name": "windowed-su25", "run_label": "pacing-su25"},
+        {"adapter_path": su("su17"), "adapter_name": "windowed-su17", "run_label": "sigma-su17"},
+        {"adapter_path": su("su10"), "adapter_name": "windowed-su10", "run_label": "sigma-su10"},
+    ]
+    if models:
+        want = {m.strip() for m in models.split(",")}
+        cells = [c for c in cells if c["run_label"] in want]
+    print(f"Launching {len(cells)} acc-vs-budget jobs | budgets={budgets} | n={num_examples}")
+    calls = [(c, acc_vs_budget_run.spawn(
+        base_model="Qwen/Qwen3-4B-Instruct-2507", budgets=budgets,
+        num_examples=num_examples, variant=variant, **c)) for c in cells]
+    for c, call in calls:
+        try:
+            r = call.get()
+        except Exception as e:
+            print(f"  {c['run_label']}: FAILED {str(e)[:200]}"); continue
+        res = r.get("result")
+        print(f"\n=== {c['run_label']}  (ok={r.get('ok')}, {r.get('duration_s')}s) ===")
+        if res:
+            print(f"{'budget':>8} {'acc':>7} {'commit':>7} {'mean_t':>7}")
+            for s in res["summary"]:
+                print(f"{s['budget']:>7.1f}s {s['accuracy']:>7.3f} {s['commit_rate']:>7.2f} {s['mean_elapsed']:>6.1f}s")
+
+
+# ---------------------------------------------------------------------------
 # Resume-from-step-500 extension (Kanishk, 2026-05-29). Copies the long-500
 # step_500 checkpoint into the extension's output_dir, then launches train_run
 # which auto-resumes via _resume_arg_if_needed.
@@ -1279,6 +1350,25 @@ def probe_windowed_su(num_examples: int = 498):
             variants=("remaining_budget",), num_examples=num_examples)
         print(f"spawned probe {label} (call={call.object_id})  n={num_examples}")
     print("Probes spawned. JSONLs land in /cache/eval_rollouts/prompt_salience/ when done.")
+
+
+@app.local_entrypoint()
+def probe_windowed_su200(num_examples: int = 498):
+    """Calibration probe (commit-time vs T, remaining_budget) on the 200-step ALL-FRESH
+    σ_under sweep — step_200 adapters for all three: su25/su17/su10. Writes
+    /cache/eval_rollouts/prompt_salience/windowed-su{25,17,10}-200_remaining_budget.jsonl.
+    One A100 per cell, ~15-20 min, fire-and-forget (launch with --detach)."""
+    cells = [
+        ("/cache/runs/ctrl0_u1_40_windowed_su25_200_qwen3_4b/weights/step_200/lora_adapters", "windowed-su25-200"),
+        ("/cache/runs/ctrl0_u1_40_windowed_su17_200_qwen3_4b/weights/step_200/lora_adapters", "windowed-su17-200"),
+        ("/cache/runs/ctrl0_u1_40_windowed_su10_200_qwen3_4b/weights/step_200/lora_adapters", "windowed-su10-200"),
+    ]
+    for adapter, label in cells:
+        call = eval_prompt_salience_run.spawn(
+            adapter_path=adapter, adapter_name=label, run_label=label,
+            variants=("remaining_budget",), num_examples=num_examples)
+        print(f"spawned probe {label} (call={call.object_id})  n={num_examples}")
+    print("Probes spawned (3 cells, step_200). JSONLs land in /cache/eval_rollouts/prompt_salience/")
 
 
 @app.function(
