@@ -229,6 +229,11 @@ def main():
     ap.add_argument("--dataset-seed", type=int, default=777)
     ap.add_argument("--target-s-min", type=float, default=1.0)
     ap.add_argument("--target-s-max", type=float, default=40.0)
+    ap.add_argument("--target-s-list", default=None,
+                    help="Comma-separated list of fixed budget T values (e.g. '2,5,10,20,30,40'). "
+                         "If set, runs one probe per budget per variant with target_s_min=max=T. "
+                         "Output filename includes the budget: <label>_T<XX>_<variant>.jsonl. "
+                         "vLLM is loaded ONCE and reused across all budget runs (saves cold-start).")
     ap.add_argument("--max-turns", type=int, default=16)
     ap.add_argument("--temperature", type=float, default=1.0)
     ap.add_argument("--top-p", type=float, default=1.0)
@@ -269,10 +274,26 @@ def main():
         lora_request = LoRARequest(args.adapter_name, 1, args.adapter_path)
         print(f"  LoRA: {args.adapter_path}  (lora_int_id=1)")
 
-    # Run each variant.
-    for variant in args.variants:
-        out_path = out_dir / f"{run_label}_{variant}.jsonl"
-        asyncio.run(run_variant(args, llm, lora_request, variant, out_path))
+    # If target-s-list is set, sweep over fixed budgets (vLLM stays loaded across
+    # all of them — this is the big wallclock win, since cold-start dominates).
+    if args.target_s_list:
+        budgets = [float(b.strip()) for b in args.target_s_list.split(",") if b.strip()]
+        print(f"\nbudget sweep: {len(budgets)} budgets × {len(args.variants)} variants "
+              f"= {len(budgets) * len(args.variants)} runs (vLLM reused throughout)")
+        for budget in budgets:
+            # Snapshot original args, override min/max so the env's per-problem
+            # rng.uniform(min, max) collapses to a constant.
+            args.target_s_min = budget
+            args.target_s_max = budget
+            budget_tag = f"T{int(round(budget)):02d}"
+            for variant in args.variants:
+                out_path = out_dir / f"{run_label}_{budget_tag}_{variant}.jsonl"
+                asyncio.run(run_variant(args, llm, lora_request, variant, out_path))
+    else:
+        # Original behavior: one variant per run, random T from [min, max].
+        for variant in args.variants:
+            out_path = out_dir / f"{run_label}_{variant}.jsonl"
+            asyncio.run(run_variant(args, llm, lora_request, variant, out_path))
 
 
 if __name__ == "__main__":

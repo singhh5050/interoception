@@ -622,6 +622,8 @@ def eval_prompt_salience_run(
     variants: tuple[str, ...] = ("base", "remaining_budget"),
     num_examples: int = 498,
     output_subdir: str = "prompt_salience",
+    problems_jsonl: str = "/root/data/eval.jsonl",
+    target_s_list: str = "",
 ) -> dict:
     """Run scripts/eval_prompt_salience.py inside Modal against the cache volume.
 
@@ -642,8 +644,10 @@ def eval_prompt_salience_run(
         "--variants", *variants,
         "--output-dir", out_dir,
         "--run-label", label,
-        "--problems-jsonl", "/root/data/eval.jsonl",
+        "--problems-jsonl", problems_jsonl,
     ]
+    if target_s_list:
+        cmd += ["--target-s-list", target_s_list]
     if adapter_path:
         cmd += ["--adapter-path", adapter_path, "--adapter-name", adapter_name]
     print(f"[prompt-salience] launching: {' '.join(cmd)}", flush=True)
@@ -1417,6 +1421,168 @@ def watch_and_probe_windowed():
     handle = auto_probe_windowed_when_ready.spawn()
     print(f"spawned auto-probe watcher (call={handle.object_id})")
     print("watcher will run server-side; safe to close terminal.")
+
+
+@app.local_entrypoint()
+def probe_test_set(
+    adapter_path: str = "",
+    run_label: str = "",
+    num_examples: int = 498,
+    variants: str = "remaining_budget",
+):
+    """Probe an arbitrary cell's adapter on the held-out test set (data/test.jsonl).
+
+    Outputs land at /cache/eval_rollouts/prompt_salience_test/<run_label>_<variant>.jsonl,
+    keyed under a separate subdir so they don't collide with eval-set probes.
+
+    Example:
+      modal run --detach modal_app.py::probe_test_set \\
+        --adapter-path /cache/runs/ctrl0_u1_40_windowed_l15_qwen3_4b/weights/step_100/lora_adapters \\
+        --run-label windowed-l15 \\
+        --variants remaining_budget,base
+    """
+    assert adapter_path, "must provide --adapter-path"
+    assert run_label, "must provide --run-label"
+    variant_tuple = tuple(v.strip() for v in variants.split(",") if v.strip())
+    print(f"Probing {run_label} on TEST set ({num_examples} examples, variants={variant_tuple})")
+    calls = []
+    for v in variant_tuple:
+        h = eval_prompt_salience_run.spawn(
+            adapter_path=adapter_path,
+            adapter_name=run_label,
+            run_label=run_label,
+            variants=(v,),
+            num_examples=num_examples,
+            output_subdir="prompt_salience_test",
+            problems_jsonl="/root/data/test.jsonl",
+        )
+        print(f"  {run_label}/{v}: spawned (call={h.object_id})")
+        calls.append((v, h))
+    print("\nAll probes spawned. Modal app runs server-side; safe to close terminal.")
+
+
+@app.local_entrypoint()
+def probe_budget_sweep(
+    budgets: str = "2,5,10,20,30,40",
+    cells: str = "base,v2-flat-l15,v2-flat-l30,windowed-l15,windowed-l30",
+    num_examples: int = 100,
+    variants: str = "remaining_budget",
+    output_subdir: str = "prompt_salience_budget",
+    problems_jsonl: str = "/root/data/test.jsonl",
+):
+    """Budget sweep: for each cell, run probes at each fixed budget T in `budgets`.
+
+    Big wallclock win: one container per CELL (not per probe), and within that
+    container vLLM stays loaded across all N budget runs. So cold-start happens
+    once per cell instead of once per (cell, budget) pair.
+
+    Default: 5 cells × 6 budgets × 1 prompt = 30 probes, but only 5 containers
+    spawned. Per-container wallclock ≈ 5 min cold-start + 6 × ~5 min rollouts
+    ≈ 35 min total (cells run in parallel).
+
+    Cell labels recognized:
+      - "base"          → no adapter, just the base Qwen3-4B
+      - "v1"            → v1 long-additive λ=0.5
+      - "v2-flat-l10/15/30"  → v2 cells (flat-1 additive)
+      - "windowed-l15/30/50" → windowed reward cells
+      - "stage2-b{0,1,2,3,4}" → stage-2 KL anchor cells
+    """
+    cell_paths = {
+        "base":         None,
+        "v1":           "/cache/runs/ctrl0_u1_40_long_additive_qwen3_4b/weights/step_100/lora_adapters",
+        "v2-flat-l10":  "/cache/runs/ctrl0_u1_40_long_additive_v2_l10_qwen3_4b/weights/step_200/lora_adapters",
+        "v2-flat-l15":  "/cache/runs/ctrl0_u1_40_long_additive_v2_l15_qwen3_4b/weights/step_200/lora_adapters",
+        "v2-flat-l30":  "/cache/runs/ctrl0_u1_40_long_additive_v2_l30_qwen3_4b/weights/step_200/lora_adapters",
+        "windowed-l15": "/cache/runs/ctrl0_u1_40_windowed_l15_qwen3_4b/weights/step_100/lora_adapters",
+        "windowed-l30": "/cache/runs/ctrl0_u1_40_windowed_l30_qwen3_4b/weights/step_100/lora_adapters",
+        "windowed-l50": "/cache/runs/ctrl0_u1_40_windowed_l50_qwen3_4b/weights/step_100/lora_adapters",
+        "stage2-b0":    "/cache/runs/stage2_kl_b0_qwen3_4b/weights/step_200/lora_adapters",
+        "stage2-b1":    "/cache/runs/stage2_kl_b1_qwen3_4b/weights/step_200/lora_adapters",
+        "stage2-b2":    "/cache/runs/stage2_kl_b2_qwen3_4b/weights/step_200/lora_adapters",
+        "stage2-b3":    "/cache/runs/stage2_kl_b3_qwen3_4b/weights/step_200/lora_adapters",
+        "stage2-b4":    "/cache/runs/stage2_kl_b4_qwen3_4b/weights/step_200/lora_adapters",
+    }
+    cell_list = [c.strip() for c in cells.split(",") if c.strip()]
+    variant_tuple = tuple(v.strip() for v in variants.split(",") if v.strip())
+    print(f"Budget sweep: cells={cell_list}, budgets={budgets}, variants={variant_tuple}, "
+          f"n={num_examples}, output_subdir={output_subdir}")
+    print(f"  ({len(cell_list)} containers, each loops {budgets.count(',')+1} budgets internally)")
+    for label in cell_list:
+        if label not in cell_paths:
+            print(f"  [skip] unknown cell {label!r} — add it to cell_paths or pass --adapter-path directly")
+            continue
+        adapter = cell_paths[label]
+        h = eval_prompt_salience_run.spawn(
+            adapter_path=adapter,
+            adapter_name=label if adapter else "base",
+            run_label=label,
+            variants=variant_tuple,
+            num_examples=num_examples,
+            output_subdir=output_subdir,
+            problems_jsonl=problems_jsonl,
+            target_s_list=budgets,
+        )
+        print(f"  {label}: spawned (call={h.object_id})")
+    print("\nAll containers spawned; modal app runs server-side.")
+
+
+@app.local_entrypoint()
+def probe_base_model_baselines(num_examples: int = 200):
+    """Re-run base-model (no adapter) probes on BOTH eval.jsonl AND test.jsonl
+    with both prompt variants. Fixes the older base probes which had a scoring
+    bug (acc came back as 0 for all rollouts).
+
+    Fires 4 probes in parallel: 2 prompt variants × 2 datasets.
+    Outputs:
+      eval:  /cache/eval_rollouts/prompt_salience/base_{base,remaining_budget}.jsonl
+      test:  /cache/eval_rollouts/prompt_salience_test/base_{base,remaining_budget}.jsonl
+    """
+    datasets = [
+        ("/root/data/eval.jsonl", "prompt_salience"),
+        ("/root/data/test.jsonl", "prompt_salience_test"),
+    ]
+    print(f"Firing 4 base-model probes (2 prompts × 2 datasets) at n={num_examples}")
+    for problems_jsonl, output_subdir in datasets:
+        for v in ("base", "remaining_budget"):
+            h = eval_prompt_salience_run.spawn(
+                adapter_path=None,
+                adapter_name="base",
+                run_label="base",
+                variants=(v,),
+                num_examples=num_examples,
+                output_subdir=output_subdir,
+                problems_jsonl=problems_jsonl,
+            )
+            print(f"  base/{v} on {problems_jsonl}: spawned (call={h.object_id})")
+    print("\nAll probes spawned; modal app runs server-side.")
+
+
+@app.local_entrypoint()
+def probe_test_set_sweep(
+    cells: str = "windowed-l15,windowed-l30,windowed-l50",
+    num_examples: int = 498,
+):
+    """Probe multiple cells on the test set in parallel. `cells` is a comma-separated
+    list of labels like "windowed-l15,windowed-l30". Adapter paths are inferred from
+    the label (currently supports the windowed naming pattern)."""
+    labels = [c.strip() for c in cells.split(",") if c.strip()]
+    for label in labels:
+        # Infer adapter path from label (currently handles "windowed-lXX" pattern)
+        if label.startswith("windowed-"):
+            tag = label.split("-", 1)[1]
+            adapter = f"/cache/runs/ctrl0_u1_40_windowed_{tag}_qwen3_4b/weights/step_100/lora_adapters"
+        else:
+            print(f"  [skip] don't know how to infer adapter path for {label!r}")
+            continue
+        for v in ("base", "remaining_budget"):
+            h = eval_prompt_salience_run.spawn(
+                adapter_path=adapter, adapter_name=label, run_label=label,
+                variants=(v,), num_examples=num_examples,
+                output_subdir="prompt_salience_test",
+                problems_jsonl="/root/data/test.jsonl",
+            )
+            print(f"  {label}/{v}: spawned (call={h.object_id})")
+    print("\nAll probes spawned; modal app runs server-side.")
 
 
 @app.local_entrypoint()
