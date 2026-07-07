@@ -509,6 +509,20 @@ def _launch_one(toml_name: str, run_name: str):
 
 
 @app.local_entrypoint()
+def pos_control():
+    """Positive control: train specialist models at FIXED budgets (windowed λ=0.30,
+    σ=0.10, target_s pinned to T) — the calibrated-by-construction accuracy ceiling per
+    budget, the counterpart to the correctness-only negative control. Fire-and-forget
+    spawn (survives --detach); checkpoints land at /cache/runs/poscontrol_fixedT{10,30}_*."""
+    jobs = [("rl/poscontrol_fixedT10_qwen3_4b.toml", "poscontrol-fixedT10"),
+            ("rl/poscontrol_fixedT30_qwen3_4b.toml", "poscontrol-fixedT30")]
+    for toml, name in jobs:
+        h = train_run.spawn(toml, name)
+        print(f"  {name}: spawned (call={h.object_id})")
+    print(f"Spawned {len(jobs)} positive-control train runs; app runs server-side (--detach).")
+
+
+@app.local_entrypoint()
 def controls_smoke():
     """Short smoke of the REAL ctrlA/ctrlB configs (4 steps, ckpt every 2) to validate
     config validation + the new env flags + B's single-turn path BEFORE the full run.
@@ -1496,6 +1510,15 @@ def probe_budget_sweep(
         "windowed-l15": "/cache/runs/ctrl0_u1_40_windowed_l15_qwen3_4b/weights/step_100/lora_adapters",
         "windowed-l30": "/cache/runs/ctrl0_u1_40_windowed_l30_qwen3_4b/weights/step_100/lora_adapters",
         "windowed-l50": "/cache/runs/ctrl0_u1_40_windowed_l50_qwen3_4b/weights/step_100/lora_adapters",
+        # σ_under sweep (200-step, windowed λ=0.30, σ_over=0.10) — Harsh's runs
+        "su25":         "/cache/runs/ctrl0_u1_40_windowed_su25_200_qwen3_4b/weights/step_200/lora_adapters",
+        "su17":         "/cache/runs/ctrl0_u1_40_windowed_su17_200_qwen3_4b/weights/step_200/lora_adapters",
+        "su10":         "/cache/runs/ctrl0_u1_40_windowed_su10_200_qwen3_4b/weights/step_200/lora_adapters",
+        # negative control: strong prompt + correctness-only (accurate, uncalibrated)
+        "correctness-only": "/cache/runs/ctrl0_u1_40_strict_conly_qwen3_4b/weights/step_500/lora_adapters",
+        # positive control (Michael): specialists trained at a single FIXED budget
+        "poscontrol-fixedT10": "/cache/runs/poscontrol_fixedT10_qwen3_4b/weights/step_200/lora_adapters",
+        "poscontrol-fixedT30": "/cache/runs/poscontrol_fixedT30_qwen3_4b/weights/step_200/lora_adapters",
         "stage2-b0":    "/cache/runs/stage2_kl_b0_qwen3_4b/weights/step_200/lora_adapters",
         "stage2-b1":    "/cache/runs/stage2_kl_b1_qwen3_4b/weights/step_200/lora_adapters",
         "stage2-b2":    "/cache/runs/stage2_kl_b2_qwen3_4b/weights/step_200/lora_adapters",
