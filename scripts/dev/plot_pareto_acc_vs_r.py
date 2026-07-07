@@ -14,6 +14,7 @@ import json, math, re, pathlib
 import matplotlib; matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 DATA = pathlib.Path("analysis/eval_rollouts/prompt_salience/prompt_salience")
+DATA_H100 = pathlib.Path("analysis/eval_rollouts/prompt_salience_h100")
 ELAPSED_RE = re.compile(r"\[([\d.]+)s elapsed")
 
 
@@ -40,32 +41,78 @@ def pearson(xs, ys):
     return sxy / (sxx*syy)**0.5 if sxx*syy > 0 else float("nan")
 
 
-# (label, fname, color)
+# (label, fname, color) — colors grouped by reward family:
+# gray=base, red=accuracy-only, orange=multiplicative, greens=flat-top additive,
+# blues=Gaussian window, purples=KL curriculum
 CELLS = [
-    ("base (no RL)",        "base_remaining_budget.jsonl",                       "#27ae60"),
-    ("v1 λ=0.5",            "long-additive_remaining_budget.jsonl",              "#bcbd22"),
-    ("v2-flat λ=0.10",      "long-additive-v2-l10_remaining_budget.jsonl",       "#1f77b4"),
-    ("v2-flat λ=0.15",      "long-additive-v2-l15_remaining_budget.jsonl",       "#2ca02c"),
-    ("v2-flat λ=0.30",      "long-additive-v2-l30_remaining_budget.jsonl",       "#d62728"),
-    ("stage2 β=0",          "stage2-kl-b0_remaining_budget.jsonl",               "#ff9896"),
-    ("stage2 β=1e-4",       "stage2-kl-b4_remaining_budget.jsonl",               "#c5b0d5"),
-    ("stage2 β=1e-3",       "stage2-kl-b3_remaining_budget.jsonl",               "#c49c94"),
-    ("stage2 β=1e-2",       "stage2-kl-b2_remaining_budget.jsonl",               "#f7b6d2"),
-    ("stage2 β=1e-1",       "stage2-kl-b1_remaining_budget.jsonl",               "#dbdb8d"),
-    ("windowed λ=0.15",     "windowed-l15_remaining_budget.jsonl",               "#17becf"),
-    ("windowed λ=0.30",     "windowed-l30_remaining_budget.jsonl",               "#1976D2"),
-    ("windowed λ=0.50",     "windowed-l50_remaining_budget.jsonl",               "#8E24AA"),
+    ("Base model (no RL)",           "base_remaining_budget.jsonl",                 "#9aa0a6"),
+    ("Accuracy-only R=c",            "strict-conly_remaining_budget.jsonl",         "#c0392b"),
+    ("Multiplicative c·f (quiet prompt)", "long-500_remaining_budget.jsonl",        "#e67e22"),
+    ("Multiplicative c·f (strict prompt)", "long-strict_remaining_budget.jsonl",    "#b9770e"),
+    ("Flat-top additive λ=0.10",     "long-additive-v2-l10_remaining_budget.jsonl", "#a1d99b"),
+    ("Flat-top additive λ=0.15",     "long-additive-v2-l15_remaining_budget.jsonl", "#74c476"),
+    ("Flat-top additive λ=0.30",     "long-additive-v2-l30_remaining_budget.jsonl", "#31a354"),
+    ("Flat-top additive λ=0.50",     "long-additive_remaining_budget.jsonl",        "#006d2c"),
+    ("Gaussian window λ=0.15",       "windowed-l15_remaining_budget.jsonl",         "#9ecae1"),
+    ("Gaussian window λ=0.30",       "windowed-l30_remaining_budget.jsonl",         "#5b9bd5"),
+    ("Gaussian window λ=0.50",       "windowed-l50_remaining_budget.jsonl",         "#2e74b5"),
+    ("KL curriculum β=0",            "stage2-kl-b0_remaining_budget.jsonl",         "#dadaeb"),
+    ("KL curriculum β=1e-4",         "stage2-kl-b4_remaining_budget.jsonl",         "#bcbddc"),
+    ("KL curriculum β=1e-3",         "stage2-kl-b3_remaining_budget.jsonl",         "#9e9ac8"),
+    ("KL curriculum β=1e-2",         "stage2-kl-b2_remaining_budget.jsonl",         "#756bb1"),
+    ("KL curriculum β=1e-1",         "stage2-kl-b1_remaining_budget.jsonl",         "#54278f"),
+]
+
+# GDPO sweep (Nicole, 2026-07-07): decoupled per-channel advantage normalization.
+# Probed on H100 with the same uniform-T protocol; plotted as diamonds.
+GDPO_CELLS = [
+    ("GDPO λ=0.15",          "gdpo-l15_remaining_budget.jsonl",        "#e31a1c"),
+    ("GDPO λ=0.15 (300 st)", "gdpo-l15-ext200_remaining_budget.jsonl", "#b10026"),
+    ("GDPO λ=0.25",          "gdpo-l25_remaining_budget.jsonl",        "#fc4e2a"),
+    ("GDPO λ=0.30",          "gdpo-l30_remaining_budget.jsonl",        "#fd8d3c"),
+    ("GDPO λ=0.40",          "gdpo-l40_remaining_budget.jsonl",        "#feb24c",),
+    ("GDPO λ=0.50",          "gdpo-l50_remaining_budget.jsonl",        "#fed976"),
+    ("GDPO λ=0.50 (300 st)", "gdpo-l50-ext200_remaining_budget.jsonl", "#ffeda0"),
+    ("GDPO λ=1.0",           "gdpo-l100_remaining_budget.jsonl",       "#ffffcc"),
+    ("GDPO sym λ=0.25",      "gdpo-sym-l25_remaining_budget.jsonl",    "#f768a1"),
+    ("GDPO sym λ=0.30",      "gdpo-sym-l30_remaining_budget.jsonl",    "#dd3497"),
+    ("GDPO sym λ=0.50",      "gdpo-sym-l50_remaining_budget.jsonl",    "#ae017e"),
+    ("GDPO sym λ=0.75",      "gdpo-sym-l75_remaining_budget.jsonl",    "#7a0177"),
+    ("GDPO tight λ=0.30",    "gdpo-tight-l30_remaining_budget.jsonl",  "#fa9fb5"),
 ]
 
 
-def compute(fname):
-    if not (DATA / fname).exists():
+import sys
+sys.path.insert(0, "environments/interoception_countdown")
+from _solver import validate_solution  # noqa: E402
+
+NUMS_RE = re.compile(r"Using the numbers \[([\d,\s]+)\].*?equals (\d+)", re.S)
+ANS_RE = re.compile(r"<answer>(.*?)</answer>", re.S)
+
+
+def rescore(text):
+    """Offline re-score for cells logged without is_correct (long-500).
+
+    Uses the env's own validate_solution; the committed answer is the LAST
+    <answer> match (the first is the literal '...' in the system prompt).
+    """
+    m = NUMS_RE.search(text)
+    answers = ANS_RE.findall(text)
+    if not m or not answers:
+        return 0
+    nums = [int(x) for x in m.group(1).split(",")]
+    target = int(m.group(2))
+    return 1 if validate_solution(answers[-1].strip(), nums, target) is True else 0
+
+
+def compute(fname, root=DATA):
+    if not (root / fname).exists():
         return None
-    recs = [json.loads(l) for l in (DATA / fname).open()]
+    recs = [json.loads(l) for l in (root / fname).open()]
     def correct(r):
         if "is_correct" in r:
             return r["is_correct"]
-        return 1 if r.get("reward", 0) > 0 else 0
+        return rescore(r["completion"])
     acc = sum(correct(r) for r in recs) / len(recs)
     committers = []
     for r in recs:
@@ -118,17 +165,47 @@ for i, (label, color, acc, r_val) in enumerate(points):
     lw = 1.8 if on_frontier else 0
     ax.scatter(r_val, acc, c=color, s=ms ** 1.8, edgecolors=edge, linewidths=lw,
                zorder=5 if on_frontier else 3, alpha=0.95)
-    # Label with slight offset
-    ax.annotate(label, (r_val, acc), xytext=(7, 4), textcoords="offset points",
-                fontsize=9, color="#222",
-                fontweight="bold" if on_frontier else "normal")
+    LABELED = {
+        "Accuracy-only R=c": (10, -4),
+        "Base model (no RL)": (-95, -4),
+        "Gaussian window λ=0.15": (8, 10),
+    }
+    if label in LABELED:
+        dx, dy = LABELED[label]
+        ax.annotate(label, (r_val, acc), xytext=(dx, dy), textcoords="offset points",
+                    fontsize=10, color="#222", fontweight="bold")
 
 # Pareto frontier line (connect frontier points sorted by r)
 front_pts = sorted([points[i] for i in pareto_idx], key=lambda p: p[3])
 front_x = [p[3] for p in front_pts]
 front_y = [p[2] for p in front_pts]
 ax.plot(front_x, front_y, color="#888", lw=1.5, ls="--", alpha=0.6, zorder=1,
-        label="Pareto frontier")
+        label="Pareto frontier (pre-GDPO)")
+
+# GDPO sweep — H100 probes, plotted as diamonds over the old frontier
+print()
+print(f"  {'GDPO cell':<28}  {'acc':>6}  {'r':>7}")
+first = True
+for label, fname, color in GDPO_CELLS:
+    result = compute(fname, root=DATA_H100)
+    if result is None:
+        continue
+    acc, r_val, n_c, n_total = result
+    print(f"  {label:<28}  {acc:>6.3f}  {r_val:>+7.3f}")
+    ax.scatter(r_val, acc, c=color, s=130, marker="D", edgecolors="black",
+               linewidths=1.0, zorder=6,
+               label="GDPO sweep (H100 probes)" if first else None)
+    first = False
+    GDPO_LABELED = {
+        "GDPO λ=0.15 (300 st)": (-30, 12),
+        "GDPO λ=0.15": (-90, -8),
+        "GDPO λ=0.50": (-38, 14),
+        "GDPO λ=0.50 (300 st)": (-125, 8),
+    }
+    if label in GDPO_LABELED:
+        dx, dy = GDPO_LABELED[label]
+        ax.annotate(label, (r_val, acc), xytext=(dx, dy), textcoords="offset points",
+                    fontsize=10, color="#7f0000", fontweight="bold")
 
 ax.axhline(0, color="#ccc", lw=0.6)
 ax.axvline(0, color="#ccc", lw=0.6)
@@ -139,7 +216,7 @@ ax.set_xlim(-0.2, 1.0); ax.set_ylim(0, 0.6)
 ax.set_title("Pareto: accuracy vs T-tracking (eval set, matched prompt)\n"
              "Frontier highlighted with bold outline; up-and-to-the-right = better on both",
              fontsize=11)
-ax.legend(loc="lower right", frameon=False, fontsize=10)
+ax.legend(loc="center left", bbox_to_anchor=(1.02, 0.5), frameon=False, fontsize=10)
 ax.grid(alpha=0.25)
 
 out = pathlib.Path("analysis/figures/51_pareto_acc_vs_r.png")
